@@ -51,6 +51,10 @@ jobs:
       - name: Apply Linux Ctrl PTT patch
         run: |
           python3 patches/apply_linux_hotkeys.py TeamTalk5
+          # Qt 6 exposes QX11Application through QGuiApplication. The upstream
+          # mainwindow.cpp already includes QGuiApplication, so no separate
+          # QNativeInterface forwarding header is required on Ubuntu 26.04.
+          sed -i '/#include <QNativeInterface>/d' TeamTalk5/Client/qtTeamTalk/mainwindow.cpp
           git -C TeamTalk5 diff -- \
             Client/qtTeamTalk/keycompdlg.cpp \
             Client/qtTeamTalk/mainwindow.cpp \
