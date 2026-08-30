@@ -56,34 +56,98 @@ jobs:
             Client/qtTeamTalk/mainwindow.cpp \
             Client/qtTeamTalk/utilhotkey.cpp
 
-      - name: Build standard Linux client
+      - name: Build standard Linux client with complete log
         shell: bash
         run: |
+          set -u
+          set -o pipefail
+
+          LOG_DIR="$GITHUB_WORKSPACE/logs"
+          LOG_FILE="$LOG_DIR/teamtalk-build.log"
+          mkdir -p "$LOG_DIR" "$GITHUB_WORKSPACE/toolchain-install" "$GITHUB_WORKSPACE/install-stage"
+
+          set +e
+          (
+            echo "===== TeamTalk Linux build diagnostics ====="
+            echo "UTC start: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "Runner: ${RUNNER_OS:-unknown} ${RUNNER_ARCH:-unknown}"
+            echo "Workspace: $GITHUB_WORKSPACE"
+            echo "Run ID: ${GITHUB_RUN_ID:-unknown}"
+            echo "Run number: ${GITHUB_RUN_NUMBER:-unknown}"
+            echo "Upstream: $UPSTREAM_REPO"
+            echo "Upstream ref: $UPSTREAM_REF"
+            echo
+            uname -a || true
+            lsb_release -a 2>/dev/null || cat /etc/os-release || true
+            echo
+            cmake --version || true
+            ninja --version || true
+            gcc --version || true
+            g++ --version || true
+            java -version || true
+            echo
+
+            cd "$GITHUB_WORKSPACE/TeamTalk5" || exit $?
+            echo "Checked out TeamTalk commit: $(git rev-parse HEAD)"
+            echo "===== Applied diff ====="
+            git diff -- \
+              Client/qtTeamTalk/keycompdlg.cpp \
+              Client/qtTeamTalk/mainwindow.cpp \
+              Client/qtTeamTalk/utilhotkey.cpp || true
+            echo "===== End applied diff ====="
+            echo
+
+            source env.sh || exit $?
+
+            echo "===== make -C Build ubuntu26 ====="
+            make -C Build \
+              CMAKE_BUILD_EXTRA="--parallel $(nproc)" \
+              CMAKE_EXTRA="-G Ninja \
+                -DFEATURE_WEBRTC=OFF \
+                -DBUILD_TEAMTALK_SERVERS=OFF \
+                -DBUILD_TEAMTALK_SERVER_SRVEXE=OFF \
+                -DBUILD_TEAMTALK_SERVER_SRVEXEPRO=OFF \
+                -DBUILD_TEAMTALK_LIBRARY_DLL=ON \
+                -DBUILD_TEAMTALK_LIBRARY_DLLPRO=OFF \
+                -DBUILD_TEAMTALK_LIBRARY_LIB=OFF \
+                -DBUILD_TEAMTALK_LIBRARY_LIBPRO=OFF \
+                -DBUILD_TEAMTALK_LIBRARY_JNI=OFF \
+                -DBUILD_TEAMTALK_LIBRARY_JNIPRO=OFF \
+                -DBUILD_TEAMTALK_LIBRARY_UNITTEST_CATCH2=OFF \
+                -DBUILD_TEAMTALK_DOCUMENTATION=OFF \
+                -DBUILD_TEAMTALK_CLIENT_PRISM=OFF \
+                -DTOOLCHAIN_INSTALL_PREFIX=$GITHUB_WORKSPACE/toolchain-install \
+                -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/install-stage" \
+              ubuntu26
+            MAKE_STATUS=$?
+            echo "make exit code: $MAKE_STATUS"
+            if [ "$MAKE_STATUS" -ne 0 ]; then
+              exit "$MAKE_STATUS"
+            fi
+
+            echo
+            echo "===== cmake install target ====="
+            cmake --build Build/build-release-ubuntu26 \
+              --target install --parallel "$(nproc)"
+            INSTALL_STATUS=$?
+            echo "cmake install exit code: $INSTALL_STATUS"
+            exit "$INSTALL_STATUS"
+          ) 2>&1 | tee "$LOG_FILE"
+
+          BUILD_STATUS=${PIPESTATUS[0]}
           set -e
-          mkdir -p "$GITHUB_WORKSPACE/toolchain-install" "$GITHUB_WORKSPACE/install-stage"
-          cd TeamTalk5
-          source env.sh
-          make -C Build \
-            CMAKE_BUILD_EXTRA="--parallel $(nproc)" \
-            CMAKE_EXTRA="-G Ninja \
-              -DFEATURE_WEBRTC=OFF \
-              -DBUILD_TEAMTALK_SERVERS=OFF \
-              -DBUILD_TEAMTALK_SERVER_SRVEXE=OFF \
-              -DBUILD_TEAMTALK_SERVER_SRVEXEPRO=OFF \
-              -DBUILD_TEAMTALK_LIBRARY_DLL=ON \
-              -DBUILD_TEAMTALK_LIBRARY_DLLPRO=OFF \
-              -DBUILD_TEAMTALK_LIBRARY_LIB=OFF \
-              -DBUILD_TEAMTALK_LIBRARY_LIBPRO=OFF \
-              -DBUILD_TEAMTALK_LIBRARY_JNI=OFF \
-              -DBUILD_TEAMTALK_LIBRARY_JNIPRO=OFF \
-              -DBUILD_TEAMTALK_LIBRARY_UNITTEST_CATCH2=OFF \
-              -DBUILD_TEAMTALK_DOCUMENTATION=OFF \
-              -DBUILD_TEAMTALK_CLIENT_PRISM=OFF \
-              -DTOOLCHAIN_INSTALL_PREFIX=$GITHUB_WORKSPACE/toolchain-install \
-              -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/install-stage" \
-            ubuntu26
-          cmake --build Build/build-release-ubuntu26 \
-            --target install --parallel "$(nproc)"
+          echo "Complete build log: $LOG_FILE"
+          echo "Final build exit code: $BUILD_STATUS"
+          exit "$BUILD_STATUS"
+
+      - name: Upload complete build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: teamtalk-build-log-${{ github.run_number }}
+          path: logs/teamtalk-build.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Package client
         shell: bash
