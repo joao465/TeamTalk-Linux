@@ -1,0 +1,126 @@
+name: Build TeamTalk Linux Ctrl PTT
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: https://github.com/BearWare/TeamTalk5.git
+  UPSTREAM_REF: 88e85978aa0592eef878bfa1e9d364cb132d6175
+  ASSET_NAME: teamtalk-linux-ctrlptt-ubuntu26-x86_64.tgz
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+
+    steps:
+      - name: Checkout Linux patch repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf cmake doxygen g++ git junit5 \
+            libasound2-dev libglib2.0-dev libpcap-dev libpulse-dev \
+            libspeechd-dev libssl-dev libtool libxss-dev make nasm \
+            ninja-build openjdk-25-jdk 7zip pkg-config \
+            python-is-python3 python3-pytest \
+            qt6-base-dev qt6-declarative-dev qt6-multimedia-dev \
+            qt6-speech-dev qt6-tools-dev qt6-tools-dev-tools \
+            wget xz-utils
+
+      - name: Clone official BearWare TeamTalk5
+        run: |
+          git clone --recursive "$UPSTREAM_REPO" TeamTalk5
+          git -C TeamTalk5 checkout "$UPSTREAM_REF"
+          git -C TeamTalk5 submodule update --init --recursive
+          echo "Official base: $(git -C TeamTalk5 rev-parse HEAD)"
+
+      - name: Apply Linux Ctrl PTT patch
+        run: |
+          python3 patches/apply_linux_hotkeys.py TeamTalk5
+          git -C TeamTalk5 diff --check
+          git -C TeamTalk5 diff -- \
+            Client/qtTeamTalk/keycompdlg.cpp \
+            Client/qtTeamTalk/mainwindow.cpp \
+            Client/qtTeamTalk/utilhotkey.cpp
+
+      - name: Build standard Linux client
+        shell: bash
+        run: |
+          set -e
+          mkdir -p "$GITHUB_WORKSPACE/toolchain-install" "$GITHUB_WORKSPACE/install-stage"
+          cd TeamTalk5
+          source env.sh
+          make -C Build \
+            CMAKE_BUILD_EXTRA="--parallel $(nproc)" \
+            CMAKE_EXTRA="-G Ninja \
+              -DFEATURE_WEBRTC=OFF \
+              -DBUILD_TEAMTALK_SERVERS=OFF \
+              -DBUILD_TEAMTALK_SERVER_SRVEXE=OFF \
+              -DBUILD_TEAMTALK_SERVER_SRVEXEPRO=OFF \
+              -DBUILD_TEAMTALK_LIBRARY_DLL=ON \
+              -DBUILD_TEAMTALK_LIBRARY_DLLPRO=OFF \
+              -DBUILD_TEAMTALK_LIBRARY_LIB=OFF \
+              -DBUILD_TEAMTALK_LIBRARY_LIBPRO=OFF \
+              -DBUILD_TEAMTALK_LIBRARY_JNI=OFF \
+              -DBUILD_TEAMTALK_LIBRARY_JNIPRO=OFF \
+              -DBUILD_TEAMTALK_LIBRARY_UNITTEST_CATCH2=OFF \
+              -DBUILD_TEAMTALK_DOCUMENTATION=OFF \
+              -DBUILD_TEAMTALK_CLIENT_PRISM=OFF \
+              -DTOOLCHAIN_INSTALL_PREFIX=$GITHUB_WORKSPACE/toolchain-install \
+              -DCMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/install-stage" \
+            ubuntu26
+          cmake --build Build/build-release-ubuntu26 \
+            --target install --parallel "$(nproc)"
+
+      - name: Package client
+        shell: bash
+        run: |
+          set -e
+          ROOT="$GITHUB_WORKSPACE/TeamTalk5"
+          INSTALL="$GITHUB_WORKSPACE/install-stage"
+          DIST="$GITHUB_WORKSPACE/dist"
+          PKG="$DIST/teamtalk-linux-ctrlptt-ubuntu26-x86_64"
+
+          rm -rf "$DIST"
+          mkdir -p "$PKG/client"
+
+          cp -a "$INSTALL/Client/qtTeamTalk/." "$PKG/client/"
+          cp "$INSTALL/Library/TeamTalk_DLL/libTeamTalk5.so" "$PKG/client/"
+          cp "$ROOT/Setup/Client/Linux/TeamTalk5.ini" "$PKG/client/TeamTalk5.ini"
+          cp "$ROOT/Setup/Client/Linux/TeamTalk5.ini" "$PKG/client/TeamTalk5.ini.default"
+          cp -a "$ROOT/Setup/Client/Sounds" "$PKG/client/sounds"
+          cp "$ROOT/Setup/Client/Linux/run.sh" "$PKG/client/run.sh"
+          chmod +x "$PKG/client/teamtalk5" "$PKG/client/run.sh"
+
+          printf 'Base oficial: BearWare/TeamTalk5\nCommit: %s\nAlteração: Linux Qt6/X11 hotkeys + Ctrl sozinho como PTT\nTeamTalk Pro: não incluído\n' \
+            "$UPSTREAM_REF" > "$PKG/BUILD-INFO.txt"
+
+          tar -czf "$DIST/$ASSET_NAME" -C "$DIST" "$(basename "$PKG")"
+          sha256sum "$DIST/$ASSET_NAME" > "$DIST/$ASSET_NAME.sha256"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: teamtalk-linux-ctrlptt-ubuntu26
+          path: |
+            dist/${{ env.ASSET_NAME }}
+            dist/${{ env.ASSET_NAME }}.sha256
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          TAG="ubuntu26-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            "dist/$ASSET_NAME" \
+            "dist/$ASSET_NAME.sha256" \
+            --title "TeamTalk Linux Ctrl PTT - build ${GITHUB_RUN_NUMBER}" \
+            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Corrige hotkeys X11 no Qt 6 e permite usar Ctrl sozinho como Push-to-Talk. Não contém nem altera o TeamTalk5Pro."
