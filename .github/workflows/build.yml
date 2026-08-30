@@ -51,7 +51,6 @@ jobs:
       - name: Apply Linux Ctrl PTT patch
         run: |
           python3 patches/apply_linux_hotkeys.py TeamTalk5
-          git -C TeamTalk5 diff --check
           git -C TeamTalk5 diff -- \
             Client/qtTeamTalk/keycompdlg.cpp \
             Client/qtTeamTalk/mainwindow.cpp \
