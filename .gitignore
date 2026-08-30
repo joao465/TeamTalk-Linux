@@ -1,0 +1,6 @@
+TeamTalk5/
+dist/
+install-stage/
+toolchain-install/
+__pycache__/
+*.pyc
