@@ -13,16 +13,16 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
     with path.open("r", encoding="utf-8", newline="") as f:
         raw = f.read()
 
-    line_ending = "\\r\\n" if "\\r\\n" in raw else "\\n"
-    text = raw.replace("\\r\\n", "\\n")
+    line_ending = "\r\n" if "\r\n" in raw else "\n"
+    text = raw.replace("\r\n", "\n")
 
     count = text.count(old)
     if count != 1:
         raise RuntimeError(f"{label}: esperado 1 bloco, encontrado {count} em {path}")
 
     result = text.replace(old, new, 1)
-    if line_ending == "\\r\\n":
-        result = result.replace("\\n", "\\r\\n")
+    if line_ending == "\r\n":
+        result = result.replace("\n", "\r\n")
 
     with path.open("w", encoding="utf-8", newline="") as f:
         f.write(result)
