@@ -3,7 +3,14 @@ name: Build TeamTalk Linux Ctrl PTT
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - "patches/**"
+      - ".github/workflows/build.yml"
   workflow_dispatch:
+
+concurrency:
+  group: teamtalk-linux-build
+  cancel-in-progress: true
 
 permissions:
   contents: write
