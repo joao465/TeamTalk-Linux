@@ -31,6 +31,85 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
 
 keycomp = repo / "Client/qtTeamTalk/keycompdlg.cpp"
 
+old = r'''void KeyCompDlg::keyPressEvent(QKeyEvent* event)
+{
+    m_hotkey.clear();
+
+    Qt::KeyboardModifiers mods = event->modifiers();
+    if(mods & Qt::CTRL)
+        m_activekeys.insert(Qt::CTRL);
+    if(mods & Qt::ALT)
+        m_activekeys.insert(Qt::ALT);
+    if(mods & Qt::SHIFT)
+        m_activekeys.insert(Qt::SHIFT);
+    if(mods & Qt::META)
+        m_activekeys.insert(Qt::META);
+
+    switch(event->key())
+    {
+    case Qt::Key_Control :
+    case Qt::Key_Alt :
+    case Qt::Key_Shift :
+    case Qt::Key_Meta :
+        break;
+    default:
+        m_activekeys.insert(event->key());
+    }
+
+    QSet<INT32>::const_iterator ite = m_activekeys.begin();
+    for(;ite != m_activekeys.end();ite++)
+        m_hotkey.push_back(*ite);
+
+    ui.keycompEdit->setText(getHotKeyText(m_hotkey));
+}
+'''
+
+new = r'''void KeyCompDlg::keyPressEvent(QKeyEvent* event)
+{
+    m_hotkey.clear();
+
+    Qt::KeyboardModifiers mods = event->modifiers();
+    if(mods & Qt::CTRL)
+        m_activekeys.insert(Qt::CTRL);
+    if(mods & Qt::ALT)
+        m_activekeys.insert(Qt::ALT);
+    if(mods & Qt::SHIFT)
+        m_activekeys.insert(Qt::SHIFT);
+    if(mods & Qt::META)
+        m_activekeys.insert(Qt::META);
+
+    // On Linux a modifier-key press must not depend only on
+    // QKeyEvent::modifiers(). When the modifier itself is the key event,
+    // explicitly store its TeamTalk/Qt modifier value. This makes Ctrl,
+    // Alt, Shift or Meta a complete hotkey without requiring a second key.
+    switch(event->key())
+    {
+    case Qt::Key_Control :
+        m_activekeys.insert(Qt::CTRL);
+        break;
+    case Qt::Key_Alt :
+        m_activekeys.insert(Qt::ALT);
+        break;
+    case Qt::Key_Shift :
+        m_activekeys.insert(Qt::SHIFT);
+        break;
+    case Qt::Key_Meta :
+        m_activekeys.insert(Qt::META);
+        break;
+    default:
+        m_activekeys.insert(event->key());
+        break;
+    }
+
+    QSet<INT32>::const_iterator ite = m_activekeys.begin();
+    for(;ite != m_activekeys.end();ite++)
+        m_hotkey.push_back(*ite);
+
+    ui.keycompEdit->setText(getHotKeyText(m_hotkey));
+}
+'''
+replace_once(keycomp, old, new, "capturar modificador sozinho no diálogo")
+
 old = r'''void KeyCompDlg::keyReleaseEvent(QKeyEvent* event)
 {
     // if KeyCompDlg is opened from a key press (e.g. Space-key) then
@@ -145,8 +224,6 @@ new = r'''#if defined(Q_OS_LINUX) //For hotkeys on X11
 #include <X11/keysym.h>
 #if QT_VERSION < QT_VERSION_CHECK(6,0,0)
 #include <QX11Info>
-#else
-#include <QNativeInterface>
 #endif
 #endif /*Q_OS_LINUX */
 '''
@@ -312,7 +389,9 @@ new = r'''#elif defined(Q_OS_LINUX)
     int pointer = GrabModeAsync;
     int keyboard = GrabModeAsync;
 
-    // no way to check for success
+    // X11 delivers both KeyPress and KeyRelease for this passive grab.
+    // MainWindow::keysActive() forwards those as active=true/false, which
+    // gives Push-to-Talk the same hold-to-talk behaviour as on Windows.
     XGrabKey(display, keycode, mods, x11window, owner, pointer, keyboard);
     // allow numlock
     XGrabKey(display, keycode, mods | Mod2Mask, x11window, owner, pointer, keyboard);
