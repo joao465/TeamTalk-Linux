@@ -55,15 +55,15 @@ new = r'''    MediaFilePlayback m_mfp = {};
     std::optional<MediaFileInfo> m_mfi;
 
 #if defined(Q_OS_LINUX)
-private slots:
-    // Método D-Bus chamado diretamente pela extensão do GNOME Shell quando
-    // o Ctrl esquerdo é pressionado ou solto globalmente.
+public slots:
+    // Métodos D-Bus usados pela extensão GNOME Shell e pelo diagnóstico.
     Q_SCRIPTABLE void setGnomeCtrlPttPressed(bool active);
+    Q_SCRIPTABLE QString getGnomeCtrlPttStatus();
 #endif
 
 signals:
 '''
-replace_once(mainwindow_h, old, new, "adicionar método D-Bus para PTT no GNOME Wayland")
+replace_once(mainwindow_h, old, new, "adicionar métodos D-Bus para PTT e diagnóstico")
 
 mainwindow = repo / "Client/qtTeamTalk/mainwindow.cpp"
 
@@ -91,8 +91,6 @@ new = r'''    ui.setupUi(this);
     // No GNOME/Wayland o portal de atalhos globais não aceita um modificador
     // sozinho. O TeamTalk registra um serviço D-Bus local e a extensão do
     // GNOME Shell chama setGnomeCtrlPttPressed(true/false) diretamente.
-    // Isso é mais confiável que um broadcast sem destinatário e permite que
-    // o cliente seja o responsável final por ligar/desligar a transmissão.
     QDBusConnection ctrlPttBus = QDBusConnection::sessionBus();
     if(ctrlPttBus.registerService(QStringLiteral("org.teamtalk.CtrlPTT")))
     {
@@ -118,38 +116,51 @@ old = r'''#if defined(Q_OS_LINUX)
 void MainWindow::keysActive(quint32 keycode, quint32 mods, bool active)
 '''
 new = r'''#if defined(Q_OS_LINUX)
+QString MainWindow::getGnomeCtrlPttStatus()
+{
+    hotkey_t hk;
+    const bool hasHotkey = loadHotKeySettings(HOTKEY_PUSHTOTALK, hk);
+    const bool ctrlOnly = hasHotkey && hk.size() == 1 && hk[0] == Qt::CTRL;
+    const bool pttEnabled = ui.actionEnablePushToTalk->isChecked();
+
+    return QStringLiteral("service=ready;ptt=%1;ctrlOnly=%2")
+        .arg(pttEnabled ? QStringLiteral("on") : QStringLiteral("off"))
+        .arg(ctrlOnly ? QStringLiteral("yes") : QStringLiteral("no"));
+}
+
 void MainWindow::setGnomeCtrlPttPressed(bool active)
 {
-    // Só aceite o relay quando Push-to-Talk estiver habilitado e configurado
-    // exatamente como Ctrl sozinho.
-    Hotkeys activeHotkeys = ttSettings->value(
-        SETTINGS_SHORTCUTS_ACTIVEHKS,
-        SETTINGS_SHORTCUTS_ACTIVEHKS_DEFAULT).toULongLong();
-    if((activeHotkeys & HOTKEY_PUSHTOTALK) == 0)
+    // Use the live UI state instead of the persisted active-hotkeys bit.
+    // The persisted setting can lag behind the current QAction state while
+    // configuring/reloading shortcuts, which made valid D-Bus calls return
+    // without touching voice transmission.
+    if(!ui.actionEnablePushToTalk->isChecked())
+    {
+        qWarning() << "GNOME Ctrl PTT ignored: Push-to-Talk action is disabled";
         return;
+    }
 
     hotkey_t hk;
-    if(!loadHotKeySettings(HOTKEY_PUSHTOTALK, hk))
+    if(!loadHotKeySettings(HOTKEY_PUSHTOTALK, hk) ||
+       hk.size() != 1 || hk[0] != Qt::CTRL)
+    {
+        qWarning() << "GNOME Ctrl PTT ignored: configured shortcut is not bare Ctrl";
         return;
-    if(hk.size() != 1 || hk[0] != Qt::CTRL)
-        return;
+    }
 
-    // O comportamento solicitado é sempre pressionar-para-falar no relay do
-    // GNOME: pressionou = transmissão ligada, soltou = desligada. Não aplique
-    // o modo "travar PTT" aqui, pois ele transformaria o Ctrl em alternância.
+    // GNOME relay is deliberately momentary: press = transmit, release = stop.
     const bool ok = TT_EnableVoiceTransmission(ttInst, active);
+    qWarning() << "GNOME Ctrl PTT" << (active ? "pressed" : "released")
+               << "TT_EnableVoiceTransmission=" << ok;
     emit updateMyself();
-    playSoundEvent(SOUNDEVENT_HOTKEY);
 
-    if(active && ok)
-        transmitOn(STREAMTYPE_VOICE);
-    else if(active && !ok)
+    if(!ok)
         addStatusMsg(STATUSBAR_BYPASS, tr("Voice transmission failed"));
 }
 
 void MainWindow::keysActive(quint32 keycode, quint32 mods, bool active)
 '''
-replace_once(mainwindow, old, new, "receber Ctrl global por chamada D-Bus direta")
+replace_once(mainwindow, old, new, "receber Ctrl global por D-Bus usando estado atual do TeamTalk")
 
 # This block exists after apply_linux_hotkeys.py has already run. On X11 we
 # keep using XGrabKey. On Wayland, bare Ctrl for PTT is registered logically
@@ -208,5 +219,3 @@ new = r'''    const bool modifierOnly = hk.size() == 1 &&
 replace_once(mainwindow, old, new, "aceitar Ctrl PTT via GNOME Wayland")
 
 print("Integração GNOME Wayland Ctrl PTT aplicada.")
-
-# This file is also the build trigger for client-side GNOME/Wayland PTT changes.
