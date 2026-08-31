@@ -1,0 +1,28 @@
+[Unit]
+Description=TeamTalk left Ctrl push-to-talk input relay
+After=systemd-udevd.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+RuntimeDirectory=teamtalk-ctrl-ptt
+RuntimeDirectoryMode=0755
+ExecStart=/usr/bin/python3 /usr/local/lib/teamtalk-ctrl-ptt/input-helper.py
+Restart=always
+RestartSec=1
+
+# The service needs read access to /dev/input/event*. Keep the rest narrow.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
