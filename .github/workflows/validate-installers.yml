@@ -1,4 +1,4 @@
-name: Validate TeamTalk Linux Installers
+name: Validate and Publish TeamTalk Linux Installers
 
 on:
   push:
@@ -10,6 +10,9 @@ on:
       - ".github/workflows/validate-installers.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   validate:
     runs-on: ubuntu-latest
@@ -20,16 +23,43 @@ jobs:
       - name: Validate Bash syntax
         run: bash -n install.sh install-gui.sh uninstall.sh
 
-      - name: Confirm graphical installer accessibility and integration
+      - name: Validate embedded Python syntax
         run: |
-          grep -q -- '--ok-label="Instalar ou atualizar"' install-gui.sh
-          grep -q -- '--extra-button="Abrir TeamTalk"' install-gui.sh
-          grep -q -- '--extra-button="Desinstalar"' install-gui.sh
+          python3 - <<'PYVALIDATE'
+          from pathlib import Path
+          text = Path('install-gui.sh').read_text(encoding='utf-8')
+          marker = 'python3 - "$@" <<\'PY\'\n'
+          if marker not in text:
+              raise SystemExit('Embedded GTK Python block not found')
+          code = text.split(marker, 1)[1].rsplit('\nPY\n', 1)[0]
+          compile(code, 'install-gui-embedded.py', 'exec')
+          print('Embedded Python syntax OK')
+          PYVALIDATE
+
+      - name: Confirm GTK accessibility and integration
+        run: |
+          grep -q 'Gtk.Button.new_with_label' install-gui.sh
+          grep -q 'Gtk.ProgressBar' install-gui.sh
+          grep -q 'set_can_focus(True)' install-gui.sh
           grep -q 'AT-SPI' install-gui.sh
+          grep -q 'Progresso da instalação' install-gui.sh
           grep -q 'pkexec' install-gui.sh
           grep -q 'XDG_SESSION_TYPE' install-gui.sh
           grep -q 'teamtalk5-linux.desktop' install-gui.sh
-          if grep -q 'zenity --list' install-gui.sh; then
-            echo 'Erro: o menu não deve voltar a usar zenity --list/radiolist, pois o Orca não anunciou as opções nesse formato.' >&2
-            exit 1
+          if grep -qi 'zenity' install-gui.sh; then
+            if grep -qE 'zenity --(list|question|progress|info|warning|error)' install-gui.sh; then
+              echo 'Erro: o instalador gráfico não deve voltar a depender da interface Zenity.' >&2
+              exit 1
+            fi
           fi
+
+      - name: Publish installers to latest Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
+          echo "Updating installer assets on release $TAG"
+          gh release upload "$TAG" install.sh install-gui.sh uninstall.sh --clobber --repo "$GITHUB_REPOSITORY"
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador gráfico GTK acessível ao Orca, instalador de terminal e desinstalador. Ctrl sozinho como Push-to-Talk global funciona em sessões X11/Xorg; o GNOME do Ubuntu 26.04 usa Wayland e não oferece esse atalho global de modificador sozinho. Não contém nem altera o TeamTalk5Pro."
