@@ -7,6 +7,7 @@ on:
       - "install.sh"
       - "install-gui.sh"
       - "uninstall.sh"
+      - "gnome-extension/**"
       - ".github/workflows/validate-installers.yml"
   workflow_dispatch:
 
@@ -36,6 +37,17 @@ jobs:
           print('Embedded Python syntax OK')
           PYVALIDATE
 
+      - name: Validate GNOME extension files
+        run: |
+          python3 -m json.tool gnome-extension/metadata.json >/dev/null
+          node --check gnome-extension/extension.js
+          grep -q 'teamtalk-ctrl-ptt@joao465' gnome-extension/metadata.json
+          grep -q 'Clutter.KEY_Control_L' gnome-extension/extension.js
+          grep -q "captured-event" gnome-extension/extension.js
+          grep -q "org.teamtalk.CtrlPTT" gnome-extension/extension.js
+          grep -q "new GLib.Variant('(b)'" gnome-extension/extension.js
+          grep -q 'return false' gnome-extension/extension.js
+
       - name: Confirm GTK accessibility and integration
         run: |
           grep -q 'Gtk.Button.new_with_label' install-gui.sh
@@ -46,6 +58,8 @@ jobs:
           grep -q 'pkexec' install-gui.sh
           grep -q 'XDG_SESSION_TYPE' install-gui.sh
           grep -q 'teamtalk5-linux.desktop' install-gui.sh
+          grep -q 'teamtalk-ctrl-ptt@joao465' install-gui.sh
+          grep -q 'gnome-extensions' install-gui.sh
           if grep -qi 'zenity' install-gui.sh; then
             if grep -qE 'zenity --(list|question|progress|info|warning|error)' install-gui.sh; then
               echo 'Erro: o instalador gráfico não deve voltar a depender da interface Zenity.' >&2
@@ -53,13 +67,17 @@ jobs:
             fi
           fi
 
-      - name: Publish installers to latest Release
+      - name: Publish installers and GNOME extension to latest Release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
-          echo "Updating installer assets on release $TAG"
-          gh release upload "$TAG" install.sh install-gui.sh uninstall.sh --clobber --repo "$GITHUB_REPOSITORY"
+          echo "Updating installer/extension assets on release $TAG"
+          gh release upload "$TAG" \
+            install.sh install-gui.sh uninstall.sh \
+            "gnome-extension/metadata.json#teamtalk-gnome-extension-metadata.json" \
+            "gnome-extension/extension.js#teamtalk-gnome-extension.js" \
+            --clobber --repo "$GITHUB_REPOSITORY"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador gráfico GTK acessível ao Orca, instalador de terminal e desinstalador. Ctrl sozinho como Push-to-Talk global funciona em sessões X11/Xorg; o GNOME do Ubuntu 26.04 usa Wayland e não oferece esse atalho global de modificador sozinho. Não contém nem altera o TeamTalk5Pro."
+            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador gráfico GTK acessível ao Orca e extensão GNOME Shell. A integração GNOME/Wayland captura Ctrl esquerdo pressionado/solto e envia o estado ao TeamTalk por D-Bus, sem bloquear Ctrl+Tab, Ctrl+C ou outras combinações. Em X11 o cliente continua usando XGrabKey. Não contém nem altera o TeamTalk5Pro."
