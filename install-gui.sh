@@ -91,6 +91,8 @@ class Installer(Gtk.Window):
         self.set_border_width(18)
         self.connect("destroy", Gtk.main_quit)
         self.busy = False
+        self._last_accessible_percent = -10
+        self._last_accessible_text = ""
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         self.add(outer)
@@ -111,8 +113,9 @@ class Installer(Gtk.Window):
         session = os.environ.get("XDG_SESSION_TYPE", "desconhecida")
         installed = "Sim" if (APP_DIR / "teamtalk5").is_file() else "Não"
         extension = "Sim" if (EXT_DIR / "extension.js").is_file() else "Não"
+        extra = " Ctrl esquerdo global usa a extensão GNOME." if session.lower() == "wayland" else ""
         self.info = Gtk.Label(
-            label=f"TeamTalk instalado: {installed}. Extensão GNOME: {extension}. Sessão: {session}."
+            label=f"TeamTalk instalado: {installed}. Extensão GNOME: {extension}. Sessão: {session}.{extra}"
         )
         self.info.set_xalign(0)
         self.info.set_line_wrap(True)
@@ -161,9 +164,6 @@ class Installer(Gtk.Window):
         self.show_all()
         self.install_button.grab_focus()
 
-        if session.lower() == "wayland":
-            GLib.idle_add(self.show_wayland_notice)
-
     def dialog(self, message_type, text, secondary=None, buttons=Gtk.ButtonsType.OK):
         dlg = Gtk.MessageDialog(
             transient_for=self,
@@ -180,18 +180,6 @@ class Installer(Gtk.Window):
         dlg.destroy()
         return response
 
-    def show_wayland_notice(self):
-        self.dialog(
-            Gtk.MessageType.INFO,
-            "Sessão GNOME Wayland detectada",
-            "Esta versão instala uma extensão do GNOME Shell para permitir "
-            "Ctrl esquerdo sozinho como Push-to-Talk global. O Ctrl não é bloqueado: "
-            "Ctrl+Tab, Ctrl+C e outras combinações continuam funcionando. "
-            "Se a extensão não puder ser ativada imediatamente, será necessário "
-            "sair e entrar na sessão GNOME uma vez."
-        )
-        return False
-
     def set_busy(self, busy):
         self.busy = busy
         for button in (self.install_button, self.open_button,
@@ -204,10 +192,18 @@ class Installer(Gtk.Window):
         self.status.set_text(text)
         self.progress.set_fraction(fraction)
         self.progress.set_text(f"{percent}% — {text}")
-        acc = self.progress.get_accessible()
-        acc.set_name(f"Progresso da instalação: {percent} por cento")
-        acc.set_description(f"{percent} por cento. {text}")
-        self.progress.grab_focus()
+
+        # Do not steal focus on every update. Repeated grab_focus() calls were
+        # causing Orca to continuously rebuild/speak the focus context. The
+        # progress bar receives focus once when installation starts; after that
+        # only meaningful accessibility updates are emitted.
+        if (text != self._last_accessible_text or
+                percent >= self._last_accessible_percent + 10 or
+                percent in (0, 100)):
+            acc = self.progress.get_accessible()
+            acc.set_description(f"{percent} por cento. {text}")
+            self._last_accessible_percent = percent
+            self._last_accessible_text = text
         return False
 
     def finish(self, text):
@@ -226,8 +222,9 @@ class Installer(Gtk.Window):
         installed = "Sim" if (APP_DIR / "teamtalk5").is_file() else "Não"
         extension = "Sim" if (EXT_DIR / "extension.js").is_file() else "Não"
         session = os.environ.get("XDG_SESSION_TYPE", "desconhecida")
+        extra = " Ctrl esquerdo global usa a extensão GNOME." if session.lower() == "wayland" else ""
         self.info.set_text(
-            f"TeamTalk instalado: {installed}. Extensão GNOME: {extension}. Sessão: {session}."
+            f"TeamTalk instalado: {installed}. Extensão GNOME: {extension}. Sessão: {session}.{extra}"
         )
         return False
 
@@ -278,6 +275,7 @@ class Installer(Gtk.Window):
         with urllib.request.urlopen(req, timeout=90) as response, open(destination, "wb") as out:
             total = int(response.headers.get("Content-Length") or 0)
             done = 0
+            last_reported = -10
             while True:
                 chunk = response.read(1024 * 256)
                 if not chunk:
@@ -285,8 +283,14 @@ class Installer(Gtk.Window):
                 out.write(chunk)
                 done += len(chunk)
                 if total:
-                    fraction = 0.44 + 0.20 * min(done / total, 1.0)
-                    GLib.idle_add(self.announce, "Baixando o TeamTalk.", fraction)
+                    ratio = min(done / total, 1.0)
+                    fraction = 0.44 + 0.20 * ratio
+                    percent = int(round(fraction * 100))
+                    # Keep the GTK/AT-SPI event queue small. Reporting every
+                    # downloaded chunk flooded Orca with value-change events.
+                    if percent >= last_reported + 2:
+                        last_reported = percent
+                        GLib.idle_add(self.announce, "Baixando o TeamTalk.", fraction)
 
     def write_launcher(self):
         APP_DIR.mkdir(parents=True, exist_ok=True)
@@ -427,6 +431,9 @@ StartupNotify=true
             return
         self.set_busy(True)
         self.announce("Iniciando a instalação.", 0.01)
+        # Focus the progress control exactly once. Orca can then follow its
+        # value changes without the installer repeatedly moving focus.
+        self.progress.grab_focus()
         threading.Thread(target=self.worker_install, daemon=True).start()
 
     def on_open(self, *_):
