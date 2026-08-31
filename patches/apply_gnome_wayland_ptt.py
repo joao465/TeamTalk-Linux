@@ -177,3 +177,5 @@ new = r'''    const bool modifierOnly = hk.size() == 1 &&
 replace_once(mainwindow, old, new, "aceitar Ctrl PTT via GNOME Wayland")
 
 print("Integração GNOME Wayland Ctrl PTT aplicada.")
+
+# This file is also the build trigger for client-side GNOME/Wayland PTT changes.
