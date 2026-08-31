@@ -13,9 +13,13 @@ DESKTOP_DIR="$DATA_HOME/applications"
 LAUNCHER="$BIN_DIR/teamtalk5-linux"
 DESKTOP_FILE="$DESKTOP_DIR/teamtalk5-linux.desktop"
 EXT_BASE="$DATA_HOME/gnome-shell/extensions"
-EXT_UUID="teamtalk-ctrl-ptt-v3@joao465"
-OLD_EXT_UUIDS=("teamtalk-ctrl-ptt@joao465" "teamtalk-ctrl-ptt-v2@joao465")
-EXT_DIR="$EXT_BASE/$EXT_UUID"
+OLD_EXT_UUIDS=(
+    "teamtalk-ctrl-ptt@joao465"
+    "teamtalk-ctrl-ptt-v2@joao465"
+    "teamtalk-ctrl-ptt-v3@joao465"
+)
+HELPER_INSTALL_DIR="/usr/local/lib/teamtalk-ctrl-ptt"
+HELPER_SERVICE="/etc/systemd/system/teamtalk-ctrl-ptt-input.service"
 
 log() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nERRO: %s\n' "$*" >&2; exit 1; }
@@ -27,8 +31,6 @@ trap cleanup EXIT
 source /etc/os-release
 [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "26.04" ]] || die "Esta build foi preparada para Ubuntu 26.04 LTS."
 
-# Replacing files while the previous client is still running leaves the old
-# process owning org.teamtalk.CtrlPTT. Require a clean restart instead.
 if pgrep -f "$APP_DIR/teamtalk5" >/dev/null 2>&1; then
     die "O TeamTalk Linux está aberto. Feche-o completamente e execute a atualização novamente."
 fi
@@ -80,10 +82,12 @@ tar -xzf "$ARCHIVE" -C "$TMP_DIR/extract"
 CLIENT_DIR="$(find "$TMP_DIR/extract" -type f -path '*/client/teamtalk5' -printf '%h\n' -quit)"
 [[ -n "$CLIENT_DIR" ]] || die "Executável teamtalk5 não encontrado no pacote."
 PACKAGE_ROOT="$(dirname "$CLIENT_DIR")"
-EXT_SOURCE="$PACKAGE_ROOT/gnome-extension"
-[[ -f "$EXT_SOURCE/metadata.json" && -f "$EXT_SOURCE/extension.js" ]] || die "Extensão GNOME não encontrada no pacote."
+HELPER_SOURCE="$PACKAGE_ROOT/input-helper"
+[[ -f "$HELPER_SOURCE/input-helper.py" && -f "$HELPER_SOURCE/teamtalk-ctrl-ptt-input.service" ]] || \
+    die "O pacote não contém o helper Linux KEY_LEFTCTRL esperado."
 
-grep -q "\"uuid\": \"$EXT_UUID\"" "$EXT_SOURCE/metadata.json" || die "O pacote não contém a extensão GNOME v3 esperada."
+grep -q 'KEY_LEFTCTRL = 29' "$HELPER_SOURCE/input-helper.py" || \
+    die "Helper de entrada inválido: KEY_LEFTCTRL não encontrado."
 
 log "Instalando o TeamTalk"
 rm -rf "$APP_DIR"
@@ -100,49 +104,28 @@ if [[ ! -f "$CFG_DIR/TeamTalk5.ini" ]]; then
     fi
 fi
 
-log "Instalando a extensão GNOME Ctrl PTT v3"
-mkdir -p "$EXT_BASE"
-for old_uuid in "${OLD_EXT_UUIDS[@]}"; do
+log "Removendo a antiga extensão GNOME Ctrl PTT"
+for uuid in "${OLD_EXT_UUIDS[@]}"; do
     if command -v gnome-extensions >/dev/null 2>&1; then
-        gnome-extensions disable "$old_uuid" >/dev/null 2>&1 || true
+        gnome-extensions disable "$uuid" >/dev/null 2>&1 || true
     fi
-    rm -rf "$EXT_BASE/$old_uuid"
+    rm -rf "$EXT_BASE/$uuid"
 done
-if command -v gnome-extensions >/dev/null 2>&1; then
-    gnome-extensions disable "$EXT_UUID" >/dev/null 2>&1 || true
-fi
-rm -rf "$EXT_DIR"
-cp -a "$EXT_SOURCE" "$EXT_DIR"
 
-# Keep the fresh UUID enabled in Shell settings even if the running Shell only
-# discovers it after the next login.
-python3 - "$EXT_UUID" "${OLD_EXT_UUIDS[@]}" <<'PY'
-import subprocess, sys
-new = sys.argv[1]
-old = set(sys.argv[2:])
-try:
-    current = subprocess.check_output(
-        ["gsettings", "get", "org.gnome.shell", "enabled-extensions"],
-        text=True,
-    )
-    # Use gsettings itself for the final write; parse the simple string array
-    # with ast.literal_eval after replacing GVariant's @as prefix if present.
-    import ast
-    text = current.strip()
-    if text.startswith('@as '):
-        text = text[4:]
-    values = list(ast.literal_eval(text))
-    values = [x for x in values if x not in old and x != new]
-    values.append(new)
-    rendered = '[' + ', '.join(repr(x) for x in values) + ']'
-    subprocess.check_call(["gsettings", "set", "org.gnome.shell", "enabled-extensions", rendered])
-except Exception as exc:
-    print(f"Aviso: não foi possível atualizar enabled-extensions automaticamente: {exc}")
-PY
-
-if command -v gnome-extensions >/dev/null 2>&1; then
-    gnome-extensions enable "$EXT_UUID" >/dev/null 2>&1 || true
+log "Instalando o helper Linux restrito ao Ctrl esquerdo"
+$SUDO systemctl stop teamtalk-ctrl-ptt-input.service >/dev/null 2>&1 || true
+$SUDO install -d -m 0755 "$HELPER_INSTALL_DIR"
+$SUDO install -m 0755 "$HELPER_SOURCE/input-helper.py" "$HELPER_INSTALL_DIR/input-helper.py"
+$SUDO install -m 0644 "$HELPER_SOURCE/teamtalk-ctrl-ptt-input.service" "$HELPER_SERVICE"
+$SUDO systemctl daemon-reload
+$SUDO systemctl enable --now teamtalk-ctrl-ptt-input.service
+sleep 1
+if ! $SUDO systemctl is-active --quiet teamtalk-ctrl-ptt-input.service; then
+    $SUDO journalctl -u teamtalk-ctrl-ptt-input.service -n 30 --no-pager || true
+    die "O helper Ctrl PTT não iniciou corretamente."
 fi
+[[ -S /run/teamtalk-ctrl-ptt/input.sock ]] || \
+    die "O helper iniciou, mas o socket /run/teamtalk-ctrl-ptt/input.sock não foi criado."
 
 log "Criando comando e atalho"
 mkdir -p "$BIN_DIR" "$DESKTOP_DIR"
@@ -171,14 +154,9 @@ EOF
 
 printf '\n============================================================\n'
 printf 'TeamTalk %s instalado.\n' "$TAG"
-printf 'Extensão: %s\n' "$EXT_UUID"
+printf 'Helper Ctrl esquerdo: ATIVO\n'
+printf 'Socket do helper: /run/teamtalk-ctrl-ptt/input.sock\n'
 printf 'Comando: %s\n' "$LAUNCHER"
-
-if command -v gnome-extensions >/dev/null 2>&1 && gnome-extensions list --active 2>/dev/null | grep -Fxq "$EXT_UUID"; then
-    printf 'Extensão GNOME: ativa nesta sessão.\n'
-else
-    printf 'Extensão GNOME: instalada e habilitada para a próxima sessão.\n'
-    printf 'Saia da sessão do GNOME e entre novamente uma vez antes de testar o Ctrl.\n'
-fi
-
-printf '\nDepois de abrir o TeamTalk, execute diagnose-ctrl-ptt.sh se o Ctrl ainda não responder.\n'
+printf '\nNão é necessário sair da sessão do GNOME.\n'
+printf 'O helper observa somente KEY_LEFTCTRL; ele não bloqueia nem remapeia a tecla.\n'
+printf 'Depois de abrir o TeamTalk, execute diagnose-ctrl-ptt.sh se o Ctrl ainda não responder.\n'
