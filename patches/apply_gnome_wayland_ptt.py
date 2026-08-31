@@ -240,6 +240,16 @@ new = r'''    const bool modifierOnly = hk.size() == 1 &&
         {
             qWarning() << "Linux Ctrl PTT: using KEY_LEFTCTRL input helper on Wayland; Qt platform ="
                        << QGuiApplication::platformName();
+
+            // TeamTalk's normal updateUI() considers PTT enabled on Linux only
+            // when HOTKEY_PUSHTOTALK exists in m_hotkeys. The Wayland helper
+            // does not perform an XGrabKey, but we must still register this
+            // logical hotkey so updateUI() does not immediately uncheck the
+            // Push-to-Talk action after the user enables it.
+            keycomp_t logicalHotkey;
+            logicalHotkey.insert(Qt::CTRL);
+            m_hotkeys.insert(id, logicalHotkey);
+
             m_pttlabel->setText(tr("Push To Talk: ") + getHotKeyText(hk));
             return;
         }
@@ -269,6 +279,6 @@ new = r'''    const bool modifierOnly = hk.size() == 1 &&
     // XGrabKey requires a real keycode. When the entire shortcut is a
     // modifier, convert it to the physical left-side X11 modifier key.
 '''
-replace_once(mainwindow, old, new, "usar helper KEY_LEFTCTRL no Wayland")
+replace_once(mainwindow, old, new, "usar helper KEY_LEFTCTRL no Wayland e manter PTT ativo")
 
 print("Integração Linux Wayland Ctrl PTT via KEY_LEFTCTRL aplicada.")
