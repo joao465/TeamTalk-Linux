@@ -20,9 +20,16 @@ jobs:
       - name: Validate Bash syntax
         run: bash -n install.sh install-gui.sh uninstall.sh
 
-      - name: Confirm graphical installer integration
+      - name: Confirm graphical installer accessibility and integration
         run: |
-          grep -q 'zenity --list' install-gui.sh
+          grep -q -- '--ok-label="Instalar ou atualizar"' install-gui.sh
+          grep -q -- '--extra-button="Abrir TeamTalk"' install-gui.sh
+          grep -q -- '--extra-button="Desinstalar"' install-gui.sh
+          grep -q 'AT-SPI' install-gui.sh
           grep -q 'pkexec' install-gui.sh
           grep -q 'XDG_SESSION_TYPE' install-gui.sh
           grep -q 'teamtalk5-linux.desktop' install-gui.sh
+          if grep -q 'zenity --list' install-gui.sh; then
+            echo 'Erro: o menu não deve voltar a usar zenity --list/radiolist, pois o Orca não anunciou as opções nesse formato.' >&2
+            exit 1
+          fi
