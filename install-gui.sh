@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # TeamTalk5 Linux graphical installer for GNOME/GTK.
-# Uses Zenity for the interface and pkexec only for system package installation.
+# Uses standard Zenity GTK dialog buttons so Orca can announce every action.
 # The TeamTalk application itself is installed in the current user's home.
 
 REPO="joao465/TeamTalk-Linux"
@@ -291,22 +291,29 @@ main_menu() {
     local session="${XDG_SESSION_TYPE:-desconhecida}"
 
     while true; do
-        local choice
+        local choice status
+
+        # Do not use Zenity's list/radiolist here. Standard GTK dialog
+        # buttons expose their names directly through AT-SPI, so Orca can
+        # announce each available action while the user moves with Tab.
         set +e
-        choice="$(zenity --list --title="$TITLE" --width=620 --height=390 \
-            --text="TeamTalk Linux com Ctrl sozinho como PTT no X11\n\nInstalado: $installed    Sessão: $session" \
-            --radiolist --column="" --column="Ação" --column="Descrição" \
-            TRUE "Instalar / Atualizar" "Baixa a Release mais recente e instala para este usuário" \
-            FALSE "Abrir TeamTalk" "Inicia o TeamTalk Linux instalado" \
-            FALSE "Desinstalar" "Remove o aplicativo e preserva sua configuração" \
-            --ok-label="Continuar" --cancel-label="Fechar" 2>/dev/null)"
-        local status=$?
+        choice="$(zenity --question --title="$TITLE" --width=620 \
+            --text="Escolha uma ação para o TeamTalk Linux.\n\nInstalado: $installed    Sessão: $session\n\nUse Tab para navegar entre os botões." \
+            --ok-label="Instalar ou atualizar" \
+            --cancel-label="Fechar" \
+            --extra-button="Abrir TeamTalk" \
+            --extra-button="Desinstalar" 2>/dev/null)"
+        status=$?
         set -e
 
         [[ "$status" -eq 0 ]] || break
 
+        # The normal OK button returns no text. Extra buttons return their
+        # own labels on stdout.
+        [[ -n "$choice" ]] || choice="Instalar ou atualizar"
+
         case "$choice" in
-            "Instalar / Atualizar")
+            "Instalar ou atualizar")
                 install_or_update
                 [[ -x "$APP_DIR/teamtalk5" ]] && installed="Sim"
                 ;;
