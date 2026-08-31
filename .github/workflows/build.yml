@@ -5,7 +5,11 @@ on:
     branches: [ "main" ]
     paths:
       - "patches/**"
-      - "gnome-extension/**"
+      - "input-helper/**"
+      - "install.sh"
+      - "install-gui.sh"
+      - "uninstall.sh"
+      - "diagnose-ctrl-ptt.sh"
       - ".github/workflows/build.yml"
   workflow_dispatch:
 
@@ -28,6 +32,12 @@ jobs:
     steps:
       - name: Checkout Linux patch repository
         uses: actions/checkout@v4
+
+      - name: Validate narrow KEY_LEFTCTRL helper
+        run: |
+          python3 -m py_compile input-helper/input-helper.py
+          grep -q 'KEY_LEFTCTRL = 29' input-helper/input-helper.py
+          grep -q 'event_type != EV_KEY or code != KEY_LEFTCTRL' input-helper/input-helper.py
 
       - name: Install build dependencies
         run: |
@@ -153,7 +163,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Package client
+      - name: Package client and input helper
         shell: bash
         run: |
           set -e
@@ -163,7 +173,7 @@ jobs:
           PKG="$DIST/teamtalk-linux-ctrlptt-ubuntu26-x86_64"
 
           rm -rf "$DIST"
-          mkdir -p "$PKG/client" "$PKG/gnome-extension"
+          mkdir -p "$PKG/client" "$PKG/input-helper"
 
           cp -a "$INSTALL/Client/qtTeamTalk/." "$PKG/client/"
           cp "$INSTALL/Library/TeamTalk_DLL/libTeamTalk5.so" "$PKG/client/"
@@ -173,10 +183,11 @@ jobs:
           cp "$ROOT/Setup/Client/Linux/run.sh" "$PKG/client/run.sh"
           chmod +x "$PKG/client/teamtalk5" "$PKG/client/run.sh"
 
-          cp gnome-extension/metadata.json "$PKG/gnome-extension/"
-          cp gnome-extension/extension.js "$PKG/gnome-extension/"
+          cp input-helper/input-helper.py "$PKG/input-helper/"
+          cp input-helper/teamtalk-ctrl-ptt-input.service "$PKG/input-helper/"
+          chmod +x "$PKG/input-helper/input-helper.py"
 
-          printf 'Base oficial: BearWare/TeamTalk5\nCommit: %s\nAlteração: Linux Qt6/X11 + GNOME Wayland Ctrl PTT v3 com diagnóstico D-Bus\nTeamTalk Pro: não incluído\n' \
+          printf 'Base oficial: BearWare/TeamTalk5\nCommit: %s\nAlteração: Linux Qt6/X11 + Wayland Ctrl PTT por helper KEY_LEFTCTRL não bloqueante\nGNOME Shell extension: não utilizada\nTeamTalk Pro: não incluído\n' \
             "$UPSTREAM_REF" > "$PKG/BUILD-INFO.txt"
 
           tar -czf "$DIST/$ASSET_NAME" -C "$DIST" "$(basename "$PKG")"
@@ -193,8 +204,8 @@ jobs:
             install-gui.sh
             uninstall.sh
             diagnose-ctrl-ptt.sh
-            gnome-extension/metadata.json
-            gnome-extension/extension.js
+            input-helper/input-helper.py
+            input-helper/teamtalk-ctrl-ptt-input.service
 
       - name: Publish GitHub Release
         env:
@@ -209,7 +220,7 @@ jobs:
             "install-gui.sh" \
             "uninstall.sh" \
             "diagnose-ctrl-ptt.sh" \
-            "gnome-extension/metadata.json#teamtalk-gnome-extension-metadata.json" \
-            "gnome-extension/extension.js#teamtalk-gnome-extension.js" \
+            "input-helper/input-helper.py#teamtalk-ctrl-ptt-input-helper.py" \
+            "input-helper/teamtalk-ctrl-ptt-input.service" \
             --title "TeamTalk Linux Ctrl PTT - build ${GITHUB_RUN_NUMBER}" \
-            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. O instalador acessível usa um terminal padrão, sem GTK/Zenity customizado. A extensão GNOME Shell v3 usa Clutter.KeyController com captured-event como fallback e chama o TeamTalk por D-Bus. O cliente expõe diagnóstico D-Bus para separar falhas de extensão, captura, configuração e transmissão. Inclui diagnose-ctrl-ptt.sh."
+            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. No Wayland, o Ctrl esquerdo global não depende mais de captura Clutter/GNOME Shell: um serviço Linux privilegiado e restrito observa somente EV_KEY/KEY_LEFTCTRL e publica apenas o estado pressionado/solto em um socket local. A tecla não é bloqueada nem remapeada, preservando Ctrl+C, Ctrl+V e Ctrl+Tab. O instalador acessível continua textual e inclui diagnóstico direto do helper antes do TeamTalk."
