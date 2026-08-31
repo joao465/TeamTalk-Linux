@@ -4,9 +4,10 @@ import GLib from 'gi://GLib';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
+const SERVICE = 'org.teamtalk.CtrlPTT';
 const OBJECT_PATH = '/org/teamtalk/CtrlPTT';
 const INTERFACE = 'org.teamtalk.CtrlPTT';
-const SIGNAL = 'Changed';
+const METHOD = 'setGnomeCtrlPttPressed';
 
 export default class TeamTalkCtrlPttExtension extends Extension {
     enable() {
@@ -26,7 +27,7 @@ export default class TeamTalkCtrlPttExtension extends Extension {
         // Never leave TeamTalk transmitting if the extension is disabled
         // while Ctrl is physically held.
         if (this._ctrlDown)
-            this._emitState(false);
+            this._sendState(false);
 
         this._ctrlDown = false;
 
@@ -55,24 +56,36 @@ export default class TeamTalkCtrlPttExtension extends Extension {
             return false;
 
         this._ctrlDown = down;
-        this._emitState(down);
+        this._sendState(down);
 
         // Do not consume the key. This is why Ctrl+Tab, Ctrl+C and all other
         // Ctrl combinations continue to reach the desktop/applications.
         return false;
     }
 
-    _emitState(active) {
-        try {
-            Gio.DBus.session.emit_signal(
-                null,
-                OBJECT_PATH,
-                INTERFACE,
-                SIGNAL,
-                new GLib.Variant('(b)', [active])
-            );
-        } catch (error) {
-            console.error(`TeamTalk Ctrl PTT: failed to emit D-Bus signal: ${error}`);
-        }
+    _sendState(active) {
+        // Call the TeamTalk-owned D-Bus service directly instead of emitting
+        // an unaddressed broadcast signal. The method call is asynchronous so
+        // the GNOME Shell never blocks while TeamTalk handles the PTT change.
+        Gio.DBus.session.call(
+            SERVICE,
+            OBJECT_PATH,
+            INTERFACE,
+            METHOD,
+            new GLib.Variant('(b)', [active]),
+            null,
+            Gio.DBusCallFlags.NONE,
+            1000,
+            null,
+            (connection, result) => {
+                try {
+                    connection.call_finish(result);
+                } catch (error) {
+                    // TeamTalk may simply not be running yet. Keep the Shell
+                    // quiet and log the failure for diagnostics only.
+                    console.debug(`TeamTalk Ctrl PTT: D-Bus call not delivered: ${error}`);
+                }
+            }
+        );
     }
 }
