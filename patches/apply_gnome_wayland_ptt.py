@@ -56,7 +56,7 @@ new = r'''    MediaFilePlayback m_mfp = {};
 
 #if defined(Q_OS_LINUX)
 public slots:
-    // Métodos D-Bus usados pela extensão GNOME Shell e pelo diagnóstico.
+    // Mantidos também para diagnóstico manual por D-Bus.
     Q_SCRIPTABLE void setGnomeCtrlPttPressed(bool active);
     Q_SCRIPTABLE QString getGnomeCtrlPttStatus();
 #endif
@@ -76,11 +76,13 @@ new = r'''#include <QSysInfo>
 #include <QThread>
 #if defined(Q_OS_LINUX)
 #include <QDBusConnection>
+#include <QLocalSocket>
+#include <QTimer>
 #endif
 
 #if defined(QT_TEXTTOSPEECH_LIB)
 '''
-replace_once(mainwindow, old, new, "incluir QDBusConnection no Linux")
+replace_once(mainwindow, old, new, "incluir D-Bus e socket local no Linux")
 
 old = r'''    ui.setupUi(this);
     setupChatHistory();
@@ -88,9 +90,9 @@ old = r'''    ui.setupUi(this);
 new = r'''    ui.setupUi(this);
 
 #if defined(Q_OS_LINUX)
-    // No GNOME/Wayland o portal de atalhos globais não aceita um modificador
-    // sozinho. O TeamTalk registra um serviço D-Bus local e a extensão do
-    // GNOME Shell chama setGnomeCtrlPttPressed(true/false) diretamente.
+    // O serviço D-Bus de sessão fica disponível somente para diagnóstico e
+    // testes manuais. A captura real do Ctrl no Wayland vem de um helper
+    // Linux restrito a KEY_LEFTCTRL e chega por um socket local somente-leitura.
     QDBusConnection ctrlPttBus = QDBusConnection::sessionBus();
     if(ctrlPttBus.registerService(QStringLiteral("org.teamtalk.CtrlPTT")))
     {
@@ -106,11 +108,48 @@ new = r'''    ui.setupUi(this);
     {
         qWarning() << "Serviço D-Bus org.teamtalk.CtrlPTT já está em uso";
     }
+
+    setProperty("teamtalkCtrlPttInputConnected", false);
+    auto* ctrlPttInput = new QLocalSocket(this);
+    auto* ctrlPttRetry = new QTimer(this);
+    ctrlPttRetry->setInterval(1000);
+
+    connect(ctrlPttRetry, &QTimer::timeout, this, [ctrlPttInput]() {
+        if(ctrlPttInput->state() == QLocalSocket::UnconnectedState)
+            ctrlPttInput->connectToServer(QStringLiteral("/run/teamtalk-ctrl-ptt/input.sock"),
+                                          QIODevice::ReadOnly);
+    });
+
+    connect(ctrlPttInput, &QLocalSocket::connected, this, [this]() {
+        setProperty("teamtalkCtrlPttInputConnected", true);
+        qWarning() << "Linux Ctrl PTT input helper connected";
+    });
+
+    connect(ctrlPttInput, &QLocalSocket::disconnected, this, [this]() {
+        setProperty("teamtalkCtrlPttInputConnected", false);
+        qWarning() << "Linux Ctrl PTT input helper disconnected; forcing PTT off";
+        setGnomeCtrlPttPressed(false);
+    });
+
+    connect(ctrlPttInput, &QLocalSocket::readyRead, this, [this, ctrlPttInput]() {
+        while(ctrlPttInput->canReadLine())
+        {
+            const QByteArray state = ctrlPttInput->readLine().trimmed();
+            if(state == "1")
+                setGnomeCtrlPttPressed(true);
+            else if(state == "0")
+                setGnomeCtrlPttPressed(false);
+        }
+    });
+
+    ctrlPttRetry->start();
+    ctrlPttInput->connectToServer(QStringLiteral("/run/teamtalk-ctrl-ptt/input.sock"),
+                                  QIODevice::ReadOnly);
 #endif
 
     setupChatHistory();
 '''
-replace_once(mainwindow, old, new, "registrar serviço D-Bus do TeamTalk")
+replace_once(mainwindow, old, new, "conectar helper KEY_LEFTCTRL ao TeamTalk")
 
 old = r'''#if defined(Q_OS_LINUX)
 void MainWindow::keysActive(quint32 keycode, quint32 mods, bool active)
@@ -124,20 +163,21 @@ QString MainWindow::getGnomeCtrlPttStatus()
     const bool pttEnabled = ui.actionEnablePushToTalk->isChecked();
     const QString sessionType = qEnvironmentVariable("XDG_SESSION_TYPE");
     const QString qpa = QGuiApplication::platformName();
+    const bool inputHelper = property("teamtalkCtrlPttInputConnected").toBool();
 
-    return QStringLiteral("service=ready;ptt=%1;ctrlOnly=%2;session=%3;qpa=%4")
+    return QStringLiteral("service=ready;ptt=%1;ctrlOnly=%2;inputHelper=%3;session=%4;qpa=%5")
         .arg(pttEnabled ? QStringLiteral("on") : QStringLiteral("off"))
         .arg(ctrlOnly ? QStringLiteral("yes") : QStringLiteral("no"))
+        .arg(inputHelper ? QStringLiteral("connected") : QStringLiteral("disconnected"))
         .arg(sessionType.isEmpty() ? QStringLiteral("unknown") : sessionType)
         .arg(qpa.isEmpty() ? QStringLiteral("unknown") : qpa);
 }
 
 void MainWindow::setGnomeCtrlPttPressed(bool active)
 {
-    // Use the live UI state instead of the persisted active-hotkeys bit.
     if(!ui.actionEnablePushToTalk->isChecked())
     {
-        qWarning() << "GNOME Ctrl PTT ignored: Push-to-Talk action is disabled";
+        qWarning() << "Linux Ctrl PTT ignored: Push-to-Talk action is disabled";
         return;
     }
 
@@ -145,13 +185,14 @@ void MainWindow::setGnomeCtrlPttPressed(bool active)
     if(!loadHotKeySettings(HOTKEY_PUSHTOTALK, hk) ||
        hk.size() != 1 || hk[0] != Qt::CTRL)
     {
-        qWarning() << "GNOME Ctrl PTT ignored: configured shortcut is not bare Ctrl";
+        qWarning() << "Linux Ctrl PTT ignored: configured shortcut is not bare Ctrl";
         return;
     }
 
-    // GNOME relay is deliberately momentary: press = transmit, release = stop.
+    // O helper observa KEY_LEFTCTRL sem bloquear/remapear a tecla. Assim
+    // Ctrl+C, Ctrl+V, Ctrl+Tab etc. continuam chegando normalmente aos apps.
     const bool ok = TT_EnableVoiceTransmission(ttInst, active);
-    qWarning() << "GNOME Ctrl PTT" << (active ? "pressed" : "released")
+    qWarning() << "Linux Ctrl PTT" << (active ? "pressed" : "released")
                << "TT_EnableVoiceTransmission=" << ok;
     emit updateMyself();
 
@@ -161,7 +202,7 @@ void MainWindow::setGnomeCtrlPttPressed(bool active)
 
 void MainWindow::keysActive(quint32 keycode, quint32 mods, bool active)
 '''
-replace_once(mainwindow, old, new, "receber Ctrl global por D-Bus usando estado atual do TeamTalk")
+replace_once(mainwindow, old, new, "receber Ctrl global do helper Linux")
 
 # This block exists after apply_linux_hotkeys.py has already run. A Qt app can
 # run through XWayland and therefore expose an X11 Display even while the real
@@ -195,13 +236,9 @@ new = r'''    const bool modifierOnly = hk.size() == 1 &&
 
     if(waylandSession)
     {
-        // IMPORTANT: a Qt application can still run through XWayland and have
-        // an X11 display such as :0. XGrabKey on that XWayland display is not
-        // a compositor-global grab. On a real Wayland session bare Ctrl PTT
-        // must therefore always use the GNOME Shell extension + D-Bus relay.
         if(id == HOTKEY_PUSHTOTALK && modifierOnly && hk[0] == Qt::CTRL)
         {
-            qWarning() << "GNOME Ctrl PTT: using D-Bus relay on Wayland; Qt platform ="
+            qWarning() << "Linux Ctrl PTT: using KEY_LEFTCTRL input helper on Wayland; Qt platform ="
                        << QGuiApplication::platformName();
             m_pttlabel->setText(tr("Push To Talk: ") + getHotKeyText(hk));
             return;
@@ -209,9 +246,9 @@ new = r'''    const bool modifierOnly = hk.size() == 1 &&
 
         QMessageBox::warning(this, tr("Enable HotKey"),
                              tr("This global hotkey is not supported on Wayland. "
-                                "On GNOME Wayland, TeamTalk supports bare Ctrl "
-                                "for Push-to-Talk through the installed GNOME "
-                                "Shell extension."));
+                                "On Wayland, this TeamTalk build supports bare "
+                                "left Ctrl for Push-to-Talk through its Linux "
+                                "input helper."));
         return;
     }
 
@@ -232,6 +269,6 @@ new = r'''    const bool modifierOnly = hk.size() == 1 &&
     // XGrabKey requires a real keycode. When the entire shortcut is a
     // modifier, convert it to the physical left-side X11 modifier key.
 '''
-replace_once(mainwindow, old, new, "usar D-Bus no Wayland mesmo quando Qt roda via XWayland")
+replace_once(mainwindow, old, new, "usar helper KEY_LEFTCTRL no Wayland")
 
-print("Integração GNOME Wayland Ctrl PTT aplicada.")
+print("Integração Linux Wayland Ctrl PTT via KEY_LEFTCTRL aplicada.")
