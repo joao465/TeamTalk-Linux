@@ -52,9 +52,6 @@ jobs:
       - name: Apply Linux Ctrl PTT patches
         run: |
           python3 patches/apply_linux_hotkeys.py TeamTalk5
-          # Qt 6 exposes QX11Application through QGuiApplication. The upstream
-          # mainwindow.cpp already includes QGuiApplication, so no separate
-          # QNativeInterface forwarding header is required on Ubuntu 26.04.
           sed -i '/#include <QNativeInterface>/d' TeamTalk5/Client/qtTeamTalk/mainwindow.cpp
           python3 patches/apply_gnome_wayland_ptt.py TeamTalk5
           git -C TeamTalk5 diff -- \
@@ -179,7 +176,7 @@ jobs:
           cp gnome-extension/metadata.json "$PKG/gnome-extension/"
           cp gnome-extension/extension.js "$PKG/gnome-extension/"
 
-          printf 'Base oficial: BearWare/TeamTalk5\nCommit: %s\nAlteração: Linux Qt6/X11 + Ctrl PTT global no GNOME Wayland via extensão GNOME Shell/D-Bus\nTeamTalk Pro: não incluído\n' \
+          printf 'Base oficial: BearWare/TeamTalk5\nCommit: %s\nAlteração: Linux Qt6/X11 + GNOME Wayland Ctrl PTT v3 com diagnóstico D-Bus\nTeamTalk Pro: não incluído\n' \
             "$UPSTREAM_REF" > "$PKG/BUILD-INFO.txt"
 
           tar -czf "$DIST/$ASSET_NAME" -C "$DIST" "$(basename "$PKG")"
@@ -195,6 +192,7 @@ jobs:
             install.sh
             install-gui.sh
             uninstall.sh
+            diagnose-ctrl-ptt.sh
             gnome-extension/metadata.json
             gnome-extension/extension.js
 
@@ -210,7 +208,8 @@ jobs:
             "install.sh" \
             "install-gui.sh" \
             "uninstall.sh" \
+            "diagnose-ctrl-ptt.sh" \
             "gnome-extension/metadata.json#teamtalk-gnome-extension-metadata.json" \
             "gnome-extension/extension.js#teamtalk-gnome-extension.js" \
             --title "TeamTalk Linux Ctrl PTT - build ${GITHUB_RUN_NUMBER}" \
-            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador gráfico GTK acessível, extensão GNOME Shell e integração D-Bus para Ctrl esquerdo sozinho como Push-to-Talk global no GNOME/Wayland. Em X11 continua usando XGrabKey. Ctrl+Tab, Ctrl+C e outras combinações continuam funcionando enquanto Ctrl permanece como PTT. Não contém nem altera o TeamTalk5Pro."
+            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. O instalador acessível usa um terminal padrão, sem GTK/Zenity customizado. A extensão GNOME Shell v3 usa Clutter.KeyController com captured-event como fallback e chama o TeamTalk por D-Bus. O cliente expõe diagnóstico D-Bus para separar falhas de extensão, captura, configuração e transmissão. Inclui diagnose-ctrl-ptt.sh."
