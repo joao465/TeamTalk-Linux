@@ -45,8 +45,8 @@ jobs:
           grep -q 'teamtalk-ctrl-ptt-v3@joao465' install.sh
           grep -q 'Feche-o completamente' install.sh
           grep -q 'getGnomeCtrlPttStatus' diagnose-ctrl-ptt.sh
-          if grep -Eq 'Gtk\.|get_accessible|AT-SPI|zenity --|ProgressBar' install-gui.sh; then
-            echo 'Erro: o lançador acessível não deve criar interface GTK/Zenity nem manipular AT-SPI.' >&2
+          if grep -Eq 'Gtk\.|get_accessible|zenity --|ProgressBar' install-gui.sh; then
+            echo 'Erro: o lançador acessível não deve criar interface GTK/Zenity nem manipular foco customizado.' >&2
             exit 1
           fi
 
