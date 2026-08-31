@@ -5,6 +5,9 @@ on:
     branches: [ "main" ]
     paths:
       - "patches/**"
+      - "install.sh"
+      - "install-gui.sh"
+      - "uninstall.sh"
       - ".github/workflows/build.yml"
   workflow_dispatch:
 
@@ -185,6 +188,9 @@ jobs:
           path: |
             dist/${{ env.ASSET_NAME }}
             dist/${{ env.ASSET_NAME }}.sha256
+            install.sh
+            install-gui.sh
+            uninstall.sh
 
       - name: Publish GitHub Release
         env:
@@ -195,5 +201,8 @@ jobs:
           gh release create "$TAG" \
             "dist/$ASSET_NAME" \
             "dist/$ASSET_NAME.sha256" \
+            "install.sh" \
+            "install-gui.sh" \
+            "uninstall.sh" \
             --title "TeamTalk Linux Ctrl PTT - build ${GITHUB_RUN_NUMBER}" \
-            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Corrige hotkeys X11 no Qt 6 e permite usar Ctrl sozinho como Push-to-Talk. Não contém nem altera o TeamTalk5Pro."
+            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador gráfico GNOME/GTK (Zenity), instalador de terminal e desinstalador. Corrige hotkeys X11 no Qt 6 e permite usar Ctrl sozinho como Push-to-Talk. Não contém nem altera o TeamTalk5Pro."
