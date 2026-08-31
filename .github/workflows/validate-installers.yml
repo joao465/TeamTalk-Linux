@@ -41,30 +41,34 @@ jobs:
         run: |
           python3 -m json.tool gnome-extension/metadata.json >/dev/null
           node --check gnome-extension/extension.js
-          grep -q 'teamtalk-ctrl-ptt@joao465' gnome-extension/metadata.json
+          grep -q 'teamtalk-ctrl-ptt-v2@joao465' gnome-extension/metadata.json
           grep -q 'Clutter.KEY_Control_L' gnome-extension/extension.js
           grep -q "captured-event" gnome-extension/extension.js
           grep -q "org.teamtalk.CtrlPTT" gnome-extension/extension.js
           grep -q "new GLib.Variant('(b)'" gnome-extension/extension.js
           grep -q 'return false' gnome-extension/extension.js
 
-      - name: Confirm GTK accessibility and integration
+      - name: Confirm simplified GTK integration
         run: |
           grep -q 'Gtk.Button.new_with_label' install-gui.sh
-          grep -q 'Gtk.ProgressBar' install-gui.sh
-          grep -q 'set_can_focus(True)' install-gui.sh
-          grep -q 'AT-SPI' install-gui.sh
-          grep -q 'Progresso da instalação' install-gui.sh
-          grep -q 'pkexec' install-gui.sh
-          grep -q 'XDG_SESSION_TYPE' install-gui.sh
-          grep -q 'teamtalk5-linux.desktop' install-gui.sh
+          grep -q 'Gtk.Entry()' install-gui.sh
+          grep -q 'set_editable(False)' install-gui.sh
+          grep -q 'teamtalk-ctrl-ptt-v2@joao465' install-gui.sh
           grep -q 'teamtalk-ctrl-ptt@joao465' install-gui.sh
-          grep -q 'gnome-extensions' install-gui.sh
-          if grep -qi 'zenity' install-gui.sh; then
-            if grep -qE 'zenity --(list|question|progress|info|warning|error)' install-gui.sh; then
-              echo 'Erro: o instalador gráfico não deve voltar a depender da interface Zenity.' >&2
-              exit 1
-            fi
+          grep -q 'Gio.Settings.new("org.gnome.shell")' install-gui.sh
+          grep -q 'pkexec' install-gui.sh
+          grep -q 'teamtalk5-linux.desktop' install-gui.sh
+          if grep -q 'get_accessible()' install-gui.sh; then
+            echo 'Erro: o instalador não deve manipular AT-SPI/Atk manualmente.' >&2
+            exit 1
+          fi
+          if grep -q 'Gtk.ProgressBar' install-gui.sh; then
+            echo 'Erro: a versão simplificada não deve usar barra de progresso dinâmica.' >&2
+            exit 1
+          fi
+          if grep -qi 'zenity --' install-gui.sh; then
+            echo 'Erro: o instalador gráfico não deve depender do Zenity.' >&2
+            exit 1
           fi
 
       - name: Publish installers and GNOME extension to latest Release
@@ -80,4 +84,4 @@ jobs:
             "gnome-extension/extension.js#teamtalk-gnome-extension.js" \
             --clobber --repo "$GITHUB_REPOSITORY"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador gráfico GTK acessível ao Orca e extensão GNOME Shell. A integração GNOME/Wayland captura Ctrl esquerdo pressionado/solto e envia o estado ao TeamTalk por D-Bus, sem bloquear Ctrl+Tab, Ctrl+C ou outras combinações. Em X11 o cliente continua usando XGrabKey. Não contém nem altera o TeamTalk5Pro."
+            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador GTK simplificado para evitar travamentos do Orca e extensão GNOME Shell com UUID novo para não reutilizar o módulo JavaScript em cache. A integração GNOME/Wayland captura Ctrl esquerdo pressionado/solto e chama o TeamTalk por D-Bus sem bloquear outras combinações com Ctrl. Em X11 o cliente continua usando XGrabKey."
