@@ -89,3 +89,5 @@ export default class TeamTalkCtrlPttExtension extends Extension {
         );
     }
 }
+
+// Build synchronization marker: package client, extension and accessible installer together.
