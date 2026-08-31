@@ -1,0 +1,28 @@
+name: Validate TeamTalk Linux Installers
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "install.sh"
+      - "install-gui.sh"
+      - "uninstall.sh"
+      - ".github/workflows/validate-installers.yml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Bash syntax
+        run: bash -n install.sh install-gui.sh uninstall.sh
+
+      - name: Confirm graphical installer integration
+        run: |
+          grep -q 'zenity --list' install-gui.sh
+          grep -q 'pkexec' install-gui.sh
+          grep -q 'XDG_SESSION_TYPE' install-gui.sh
+          grep -q 'teamtalk5-linux.desktop' install-gui.sh
