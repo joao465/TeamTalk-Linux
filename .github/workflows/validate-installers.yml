@@ -1,4 +1,4 @@
-name: Validate and Publish TeamTalk Linux Installers
+name: Validate TeamTalk Linux Installer and Input Helper
 
 on:
   push:
@@ -8,12 +8,9 @@ on:
       - "install-gui.sh"
       - "uninstall.sh"
       - "diagnose-ctrl-ptt.sh"
-      - "gnome-extension/**"
+      - "input-helper/**"
       - ".github/workflows/validate-installers.yml"
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   validate:
@@ -25,42 +22,26 @@ jobs:
       - name: Validate Bash syntax
         run: bash -n install.sh install-gui.sh uninstall.sh diagnose-ctrl-ptt.sh
 
-      - name: Validate GNOME extension files
+      - name: Validate narrow KEY_LEFTCTRL helper
         run: |
-          python3 -m json.tool gnome-extension/metadata.json >/dev/null
-          node --check gnome-extension/extension.js
-          grep -q 'teamtalk-ctrl-ptt-v3@joao465' gnome-extension/metadata.json
-          grep -q 'Clutter.KEY_Control_L' gnome-extension/extension.js
-          grep -q 'Clutter.KeyController' gnome-extension/extension.js
-          grep -q "captured-event" gnome-extension/extension.js
-          grep -q 'org.teamtalk.CtrlPTT' gnome-extension/extension.js
-          grep -q 'setGnomeCtrlPttPressed' gnome-extension/extension.js
-          grep -q 'EVENT_PROPAGATE' gnome-extension/extension.js
+          python3 -m py_compile input-helper/input-helper.py
+          grep -q 'KEY_LEFTCTRL = 29' input-helper/input-helper.py
+          grep -q 'event_type != EV_KEY or code != KEY_LEFTCTRL' input-helper/input-helper.py
+          grep -q '/run/teamtalk-ctrl-ptt/input.sock' input-helper/input-helper.py
+          grep -q 'User=root' input-helper/teamtalk-ctrl-ptt-input.service
+          grep -q 'RuntimeDirectory=teamtalk-ctrl-ptt' input-helper/teamtalk-ctrl-ptt-input.service
+          if grep -Eq 'print\(.*code|print\(.*event|logging\..*event' input-helper/input-helper.py; then
+            echo 'Erro: o helper não deve registrar eventos/teclas.' >&2
+            exit 1
+          fi
 
       - name: Confirm Orca-friendly terminal installer
         run: |
           grep -q 'Instalador acessível' install-gui.sh
           grep -q 'Diagnosticar Ctrl PTT' install-gui.sh
           grep -q 'diagnose-ctrl-ptt.sh' install-gui.sh
-          grep -q 'teamtalk-ctrl-ptt-v3@joao465' install.sh
           grep -q 'Feche-o completamente' install.sh
-          grep -q 'getGnomeCtrlPttStatus' diagnose-ctrl-ptt.sh
           if grep -Eq 'Gtk\.|get_accessible|zenity --|ProgressBar' install-gui.sh; then
             echo 'Erro: o lançador acessível não deve criar interface GTK/Zenity nem manipular foco customizado.' >&2
             exit 1
           fi
-
-      - name: Publish installers, diagnostics and GNOME extension to latest Release
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
-          echo "Updating installer/diagnostic assets on release $TAG"
-          gh release upload "$TAG" \
-            install.sh install-gui.sh uninstall.sh diagnose-ctrl-ptt.sh \
-            "gnome-extension/metadata.json#teamtalk-gnome-extension-metadata.json" \
-            "gnome-extension/extension.js#teamtalk-gnome-extension.js" \
-            --clobber --repo "$GITHUB_REPOSITORY"
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. O instalador acessível agora usa somente um terminal padrão, sem interface GTK/Zenity customizada. A extensão GNOME Shell v3 usa Clutter.KeyController com captured-event como fallback para Ctrl esquerdo e comunica com o TeamTalk por D-Bus. Inclui diagnose-ctrl-ptt.sh para identificar separadamente carregamento da extensão, captura do Ctrl, D-Bus e configuração do PTT."
