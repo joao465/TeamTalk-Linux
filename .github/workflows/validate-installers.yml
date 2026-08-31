@@ -7,6 +7,7 @@ on:
       - "install.sh"
       - "install-gui.sh"
       - "uninstall.sh"
+      - "diagnose-ctrl-ptt.sh"
       - "gnome-extension/**"
       - ".github/workflows/validate-installers.yml"
   workflow_dispatch:
@@ -22,66 +23,44 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate Bash syntax
-        run: bash -n install.sh install-gui.sh uninstall.sh
-
-      - name: Validate embedded Python syntax
-        run: |
-          python3 - <<'PYVALIDATE'
-          from pathlib import Path
-          text = Path('install-gui.sh').read_text(encoding='utf-8')
-          marker = 'python3 - "$@" <<\'PY\'\n'
-          if marker not in text:
-              raise SystemExit('Embedded GTK Python block not found')
-          code = text.split(marker, 1)[1].rsplit('\nPY\n', 1)[0]
-          compile(code, 'install-gui-embedded.py', 'exec')
-          print('Embedded Python syntax OK')
-          PYVALIDATE
+        run: bash -n install.sh install-gui.sh uninstall.sh diagnose-ctrl-ptt.sh
 
       - name: Validate GNOME extension files
         run: |
           python3 -m json.tool gnome-extension/metadata.json >/dev/null
           node --check gnome-extension/extension.js
-          grep -q 'teamtalk-ctrl-ptt-v2@joao465' gnome-extension/metadata.json
+          grep -q 'teamtalk-ctrl-ptt-v3@joao465' gnome-extension/metadata.json
           grep -q 'Clutter.KEY_Control_L' gnome-extension/extension.js
+          grep -q 'Clutter.KeyController' gnome-extension/extension.js
           grep -q "captured-event" gnome-extension/extension.js
-          grep -q "org.teamtalk.CtrlPTT" gnome-extension/extension.js
-          grep -q "new GLib.Variant('(b)'" gnome-extension/extension.js
-          grep -q 'return false' gnome-extension/extension.js
+          grep -q 'org.teamtalk.CtrlPTT' gnome-extension/extension.js
+          grep -q 'setGnomeCtrlPttPressed' gnome-extension/extension.js
+          grep -q 'EVENT_PROPAGATE' gnome-extension/extension.js
 
-      - name: Confirm simplified GTK integration
+      - name: Confirm Orca-friendly terminal installer
         run: |
-          grep -q 'Gtk.Button.new_with_label' install-gui.sh
-          grep -q 'Gtk.Entry()' install-gui.sh
-          grep -q 'set_editable(False)' install-gui.sh
-          grep -q 'teamtalk-ctrl-ptt-v2@joao465' install-gui.sh
-          grep -q 'teamtalk-ctrl-ptt@joao465' install-gui.sh
-          grep -q 'Gio.Settings.new("org.gnome.shell")' install-gui.sh
-          grep -q 'pkexec' install-gui.sh
-          grep -q 'teamtalk5-linux.desktop' install-gui.sh
-          if grep -q 'get_accessible()' install-gui.sh; then
-            echo 'Erro: o instalador não deve manipular AT-SPI/Atk manualmente.' >&2
-            exit 1
-          fi
-          if grep -q 'Gtk.ProgressBar' install-gui.sh; then
-            echo 'Erro: a versão simplificada não deve usar barra de progresso dinâmica.' >&2
-            exit 1
-          fi
-          if grep -qi 'zenity --' install-gui.sh; then
-            echo 'Erro: o instalador gráfico não deve depender do Zenity.' >&2
+          grep -q 'Instalador acessível' install-gui.sh
+          grep -q 'Diagnosticar Ctrl PTT' install-gui.sh
+          grep -q 'diagnose-ctrl-ptt.sh' install-gui.sh
+          grep -q 'teamtalk-ctrl-ptt-v3@joao465' install.sh
+          grep -q 'Feche-o completamente' install.sh
+          grep -q 'getGnomeCtrlPttStatus' diagnose-ctrl-ptt.sh
+          if grep -Eq 'Gtk\.|get_accessible|AT-SPI|zenity --|ProgressBar' install-gui.sh; then
+            echo 'Erro: o lançador acessível não deve criar interface GTK/Zenity nem manipular AT-SPI.' >&2
             exit 1
           fi
 
-      - name: Publish installers and GNOME extension to latest Release
+      - name: Publish installers, diagnostics and GNOME extension to latest Release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)"
-          echo "Updating installer/extension assets on release $TAG"
+          echo "Updating installer/diagnostic assets on release $TAG"
           gh release upload "$TAG" \
-            install.sh install-gui.sh uninstall.sh \
+            install.sh install-gui.sh uninstall.sh diagnose-ctrl-ptt.sh \
             "gnome-extension/metadata.json#teamtalk-gnome-extension-metadata.json" \
             "gnome-extension/extension.js#teamtalk-gnome-extension.js" \
             --clobber --repo "$GITHUB_REPOSITORY"
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador GTK simplificado para evitar travamentos do Orca e extensão GNOME Shell com UUID novo para não reutilizar o módulo JavaScript em cache. A integração GNOME/Wayland captura Ctrl esquerdo pressionado/solto e chama o TeamTalk por D-Bus sem bloquear outras combinações com Ctrl. Em X11 o cliente continua usando XGrabKey."
+            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. O instalador acessível agora usa somente um terminal padrão, sem interface GTK/Zenity customizada. A extensão GNOME Shell v3 usa Clutter.KeyController com captured-event como fallback para Ctrl esquerdo e comunica com o TeamTalk por D-Bus. Inclui diagnose-ctrl-ptt.sh para identificar separadamente carregamento da extensão, captura do Ctrl, D-Bus e configuração do PTT."
