@@ -1,0 +1,7 @@
+{
+  "uuid": "teamtalk-ctrl-ptt@joao465",
+  "name": "TeamTalk Ctrl Push-to-Talk",
+  "description": "Relays global left Ctrl press/release events to TeamTalk for Push-to-Talk on GNOME Wayland.",
+  "shell-version": ["50"],
+  "version": 1
+}
