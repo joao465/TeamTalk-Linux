@@ -1,336 +1,417 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# TeamTalk5 Linux graphical installer for GNOME/GTK.
-# Uses standard Zenity GTK dialog buttons so Orca can announce every action.
-# The TeamTalk application itself is installed in the current user's home.
+# Accessible TeamTalk Linux installer for GNOME/Orca.
+# Uses native GTK 3 widgets exposed through AT-SPI. Zenity is intentionally
+# not used because its dialog roles/progress were not announced reliably by Orca.
 
-REPO="joao465/TeamTalk-Linux"
-ASSET="teamtalk-linux-ctrlptt-ubuntu26-x86_64.tgz"
-API="https://api.github.com/repos/$REPO/releases/latest"
-
-APP_DIR="${TEAMTALK_LINUX_APP_DIR:-$HOME/.local/opt/teamtalk5-linux-ctrlptt}"
-CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/teamtalk5-linux-ctrlptt"
-BIN_DIR="$HOME/.local/bin"
-DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-LAUNCHER="$BIN_DIR/teamtalk5-linux"
-DESKTOP_FILE="$DESKTOP_DIR/teamtalk5-linux.desktop"
-TITLE="TeamTalk Linux — Instalador"
-TMP_DIR=""
-
-cleanup() {
-    [[ -n "${TMP_DIR:-}" && -d "${TMP_DIR:-}" ]] && rm -rf "$TMP_DIR"
-}
-trap cleanup EXIT
-
-plain_error() {
-    printf 'ERRO: %s\n' "$*" >&2
-    exit 1
-}
-
-ensure_zenity() {
-    if command -v zenity >/dev/null 2>&1; then
-        return
-    fi
-
-    [[ "$(uname -s)" == "Linux" ]] || plain_error "Este instalador é somente para Linux."
-
-    if [[ "$EUID" -eq 0 ]]; then
-        apt-get update && env DEBIAN_FRONTEND=noninteractive apt-get install -y zenity
-    elif command -v pkexec >/dev/null 2>&1; then
-        printf 'Zenity não está instalado. Será aberta a autenticação do sistema para instalá-lo.\n'
-        pkexec sh -c 'apt-get update && env DEBIAN_FRONTEND=noninteractive apt-get install -y zenity'
-    elif command -v sudo >/dev/null 2>&1 && [[ -t 0 ]]; then
-        sudo apt-get update
-        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y zenity
-    else
-        plain_error "Zenity não está instalado e não foi possível abrir um método gráfico de autenticação. Instale o pacote zenity e execute novamente."
-    fi
-
-    command -v zenity >/dev/null 2>&1 || plain_error "Não foi possível instalar o Zenity."
-}
-
-show_error() {
-    zenity --error --title="$TITLE" --width=520 --text="$1" 2>/dev/null || true
-}
-
-show_info() {
-    zenity --info --title="$TITLE" --width=520 --text="$1" 2>/dev/null || true
-}
-
-show_warning() {
-    zenity --warning --title="$TITLE" --width=540 --text="$1" 2>/dev/null || true
-}
-
-run_with_progress() {
-    local heading="$1"
-    local message="$2"
-    shift 2
-
-    local log_file
-    log_file="$(mktemp)"
-
-    set +e
-    "$@" >"$log_file" 2>&1 &
-    local cmd_pid=$!
-
-    (
-        while kill -0 "$cmd_pid" 2>/dev/null; do
-            printf '# %s\n' "$message"
-            sleep 0.8
-        done
-        printf '100\n'
-    ) | zenity --progress \
-        --title="$heading" \
-        --text="$message" \
-        --pulsate --auto-close --no-cancel \
-        --width=520 2>/dev/null
-    local zenity_status=${PIPESTATUS[1]}
-
-    wait "$cmd_pid"
-    local cmd_status=$?
-    set -e
-
-    if [[ "$zenity_status" -ne 0 && "$cmd_status" -eq 0 ]]; then
-        rm -f "$log_file"
-        return 0
-    fi
-
-    if [[ "$cmd_status" -ne 0 ]]; then
-        local details
-        details="$(tail -n 30 "$log_file" 2>/dev/null || true)"
-        rm -f "$log_file"
-        show_error "$message\n\nCódigo de erro: $cmd_status\n\n$details"
-        return "$cmd_status"
-    fi
-
-    rm -f "$log_file"
-    return 0
-}
-
-run_root_packages() {
-    local packages=(
-        ca-certificates wget python3 tar
-        libqt6dbus6 libqt6multimedia6 libqt6network6
-        libqt6texttospeech6 libqt6widgets6 libqt6xml6
-        libasound2t64 libpulse0 libxss1 qt6-speech-speechd-plugin
-    )
-
-    if [[ "$EUID" -eq 0 ]]; then
-        apt-get update
-        env DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
+ensure_gui_runtime() {
+    if python3 - <<'PY' >/dev/null 2>&1
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+PY
+    then
         return
     fi
 
     if command -v pkexec >/dev/null 2>&1; then
         pkexec env DEBIAN_FRONTEND=noninteractive sh -c \
-            'apt-get update && apt-get install -y ca-certificates wget python3 tar libqt6dbus6 libqt6multimedia6 libqt6network6 libqt6texttospeech6 libqt6widgets6 libqt6xml6 libasound2t64 libpulse0 libxss1 qt6-speech-speechd-plugin'
-        return
-    fi
-
-    return 126
-}
-
-check_platform() {
-    [[ "$(uname -s)" == "Linux" ]] || {
-        show_error "Este instalador é somente para Linux."
-        exit 1
-    }
-
-    [[ "$(uname -m)" == "x86_64" ]] || {
-        show_error "Esta build do TeamTalk é somente para computadores x86_64."
-        exit 1
-    }
-
-    if [[ -r /etc/os-release ]]; then
-        # shellcheck disable=SC1091
-        source /etc/os-release
-    fi
-
-    if [[ "${ID:-}" != "ubuntu" || "${VERSION_ID:-}" != "26.04" ]]; then
-        show_error "Esta build foi preparada para Ubuntu 26.04 LTS.\n\nSistema detectado: ${PRETTY_NAME:-desconhecido}."
+            'apt-get update && apt-get install -y python3-gi gir1.2-gtk-3.0 policykit-1'
+    elif command -v sudo >/dev/null 2>&1 && [[ -t 0 ]]; then
+        sudo apt-get update
+        sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            python3-gi gir1.2-gtk-3.0 policykit-1
+    else
+        printf '%s\n' \
+            'ERRO: a interface GTK não está instalada e não foi possível abrir a autenticação do sistema.' \
+            'Instale python3-gi e gir1.2-gtk-3.0 e execute novamente.' >&2
         exit 1
     fi
 }
 
-release_info() {
-    python3 - "$API" "$ASSET" <<'PY'
-import json, sys, urllib.request
-api, wanted = sys.argv[1], sys.argv[2]
-with urllib.request.urlopen(api, timeout=30) as r:
-    data = json.load(r)
-asset = next((a for a in data.get("assets", []) if a.get("name") == wanted), None)
-if not asset:
-    raise SystemExit(f"Asset {wanted!r} não encontrado na última Release")
-print(data.get("tag_name", "desconhecida"))
-print(asset["browser_download_url"])
-PY
-}
+ensure_gui_runtime
 
-install_or_update() {
-    if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
-        show_warning "Sua sessão atual é Wayland.\n\nO TeamTalk pode ser instalado e usado normalmente, mas Ctrl sozinho como Push-to-Talk GLOBAL requer uma sessão X11/Xorg."
-    fi
+python3 - "$@" <<'PY'
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk, GLib
 
-    run_with_progress "$TITLE" "Instalando dependências necessárias…" run_root_packages || return
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import threading
+import urllib.request
 
-    local info tag asset_url
-    set +e
-    info="$(release_info 2>&1)"
-    local info_status=$?
-    set -e
-    if [[ "$info_status" -ne 0 ]]; then
-        show_error "Não foi possível consultar a última Release.\n\n$info"
-        return
-    fi
+REPO = "joao465/TeamTalk-Linux"
+ASSET = "teamtalk-linux-ctrlptt-ubuntu26-x86_64.tgz"
+API = f"https://api.github.com/repos/{REPO}/releases/latest"
 
-    tag="$(printf '%s\n' "$info" | sed -n '1p')"
-    asset_url="$(printf '%s\n' "$info" | sed -n '2p')"
+HOME = Path.home()
+APP_DIR = Path(os.environ.get("TEAMTALK_LINUX_APP_DIR",
+                              HOME / ".local/opt/teamtalk5-linux-ctrlptt"))
+CFG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "teamtalk5-linux-ctrlptt"
+BIN_DIR = HOME / ".local/bin"
+DESKTOP_DIR = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share")) / "applications"
+LAUNCHER = BIN_DIR / "teamtalk5-linux"
+DESKTOP_FILE = DESKTOP_DIR / "teamtalk5-linux.desktop"
 
-    TMP_DIR="$(mktemp -d)"
-    local archive="$TMP_DIR/$ASSET"
+RUNTIME_PACKAGES = [
+    "ca-certificates", "wget", "python3", "tar",
+    "libqt6dbus6", "libqt6multimedia6", "libqt6network6",
+    "libqt6texttospeech6", "libqt6widgets6", "libqt6xml6",
+    "libasound2t64", "libpulse0", "libxss1", "qt6-speech-speechd-plugin",
+]
 
-    run_with_progress "$TITLE" "Baixando TeamTalk Linux $tag…" \
-        wget -q -O "$archive" "$asset_url" || return
+def read_os_release():
+    data = {}
+    try:
+        for line in Path("/etc/os-release").read_text(encoding="utf-8").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                data[key] = value.strip().strip('"')
+    except OSError:
+        pass
+    return data
 
-    if ! tar -tzf "$archive" >/dev/null 2>&1; then
-        show_error "O pacote baixado não é um arquivo válido."
-        return
-    fi
+class Installer(Gtk.Window):
+    def __init__(self):
+        super().__init__(title="TeamTalk Linux — Instalador")
+        self.set_default_size(650, 360)
+        self.set_border_width(18)
+        self.connect("destroy", Gtk.main_quit)
+        self.busy = False
 
-    mkdir -p "$TMP_DIR/extract"
-    tar -xzf "$archive" -C "$TMP_DIR/extract"
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        self.add(outer)
 
-    local client_dir
-    client_dir="$(find "$TMP_DIR/extract" -type f -path '*/client/teamtalk5' -printf '%h\n' -quit)"
-    if [[ -z "$client_dir" ]]; then
-        show_error "O executável teamtalk5 não foi encontrado dentro do pacote."
-        return
-    fi
+        title = Gtk.Label()
+        title.set_markup("<big><b>TeamTalk Linux</b></big>")
+        title.set_xalign(0)
+        outer.pack_start(title, False, False, 0)
 
-    mkdir -p "$APP_DIR" "$CFG_DIR" "$BIN_DIR" "$DESKTOP_DIR"
-    rm -rf "$APP_DIR"
-    mkdir -p "$APP_DIR"
-    cp -a "$client_dir"/. "$APP_DIR"/
-    chmod +x "$APP_DIR/teamtalk5"
+        self.summary = Gtk.Label(
+            label="Instalador acessível para GNOME e Orca. "
+                  "Use Tab e Shift+Tab para navegar pelos controles."
+        )
+        self.summary.set_line_wrap(True)
+        self.summary.set_xalign(0)
+        outer.pack_start(self.summary, False, False, 0)
 
-    if [[ ! -f "$CFG_DIR/TeamTalk5.ini" ]]; then
-        if [[ -f "$APP_DIR/TeamTalk5.ini.default" ]]; then
-            cp "$APP_DIR/TeamTalk5.ini.default" "$CFG_DIR/TeamTalk5.ini"
-        else
-            : > "$CFG_DIR/TeamTalk5.ini"
-        fi
-    fi
+        session = os.environ.get("XDG_SESSION_TYPE", "desconhecida")
+        installed = "Sim" if (APP_DIR / "teamtalk5").is_file() else "Não"
+        self.info = Gtk.Label(label=f"Instalado: {installed}. Sessão gráfica: {session}.")
+        self.info.set_xalign(0)
+        outer.pack_start(self.info, False, False, 0)
 
-    cat > "$LAUNCHER" <<EOF
-#!/usr/bin/env bash
+        self.status = Gtk.Label(label="Pronto.")
+        self.status.set_xalign(0)
+        self.status.set_line_wrap(True)
+        self.status.set_selectable(True)
+        self.status.get_accessible().set_name("Status da instalação")
+        outer.pack_start(self.status, False, False, 0)
+
+        self.progress = Gtk.ProgressBar()
+        self.progress.set_show_text(True)
+        self.progress.set_text("0% — Pronto")
+        self.progress.set_fraction(0.0)
+        self.progress.set_can_focus(True)
+        acc = self.progress.get_accessible()
+        acc.set_name("Progresso da instalação")
+        acc.set_description("0 por cento. Pronto.")
+        outer.pack_start(self.progress, False, False, 0)
+
+        buttons = Gtk.ButtonBox(orientation=Gtk.Orientation.HORIZONTAL)
+        buttons.set_layout(Gtk.ButtonBoxStyle.EXPAND)
+        outer.pack_end(buttons, False, False, 0)
+
+        self.install_button = Gtk.Button.new_with_label("Instalar ou atualizar")
+        self.open_button = Gtk.Button.new_with_label("Abrir TeamTalk")
+        self.uninstall_button = Gtk.Button.new_with_label("Desinstalar")
+        self.close_button = Gtk.Button.new_with_label("Fechar")
+
+        self.install_button.get_accessible().set_name("Instalar ou atualizar TeamTalk")
+        self.open_button.get_accessible().set_name("Abrir TeamTalk instalado")
+        self.uninstall_button.get_accessible().set_name("Desinstalar TeamTalk")
+        self.close_button.get_accessible().set_name("Fechar instalador")
+
+        for button in (self.install_button, self.open_button,
+                       self.uninstall_button, self.close_button):
+            buttons.add(button)
+
+        self.install_button.connect("clicked", self.on_install)
+        self.open_button.connect("clicked", self.on_open)
+        self.uninstall_button.connect("clicked", self.on_uninstall)
+        self.close_button.connect("clicked", lambda *_: Gtk.main_quit())
+
+        self.show_all()
+        self.install_button.grab_focus()
+
+        if session.lower() == "wayland":
+            GLib.idle_add(self.show_wayland_notice)
+
+    def dialog(self, message_type, text, secondary=None, buttons=Gtk.ButtonsType.OK):
+        dlg = Gtk.MessageDialog(
+            transient_for=self,
+            modal=True,
+            destroy_with_parent=True,
+            message_type=message_type,
+            buttons=buttons,
+            text=text,
+        )
+        if secondary:
+            dlg.format_secondary_text(secondary)
+        dlg.get_accessible().set_name(text)
+        response = dlg.run()
+        dlg.destroy()
+        return response
+
+    def show_wayland_notice(self):
+        self.dialog(
+            Gtk.MessageType.INFO,
+            "Sessão GNOME Wayland detectada",
+            "O TeamTalk pode ser instalado e usado normalmente. "
+            "Porém, Ctrl sozinho como atalho GLOBAL de pressionar-para-falar "
+            "não é suportado pela sessão GNOME Wayland do Ubuntu 26.04. "
+            "O modo Ctrl sozinho requer uma sessão de desktop X11/Xorg."
+        )
+        return False
+
+    def set_busy(self, busy):
+        self.busy = busy
+        for button in (self.install_button, self.open_button,
+                       self.uninstall_button, self.close_button):
+            button.set_sensitive(not busy)
+
+    def announce(self, text, fraction):
+        fraction = max(0.0, min(1.0, fraction))
+        percent = int(round(fraction * 100))
+        self.status.set_text(text)
+        self.progress.set_fraction(fraction)
+        self.progress.set_text(f"{percent}% — {text}")
+        acc = self.progress.get_accessible()
+        acc.set_description(f"{percent} por cento. {text}")
+        # Keep the accessible progress control focused while work is running.
+        # Orca then receives the AT-SPI value/status changes instead of a
+        # silent visual-only animation.
+        self.progress.grab_focus()
+        return False
+
+    def finish(self, text):
+        self.announce(text, 1.0)
+        self.set_busy(False)
+        self.install_button.grab_focus()
+        return False
+
+    def fail(self, title, details):
+        self.set_busy(False)
+        self.dialog(Gtk.MessageType.ERROR, title, details)
+        self.install_button.grab_focus()
+        return False
+
+    def update_installed_label(self):
+        installed = "Sim" if (APP_DIR / "teamtalk5").is_file() else "Não"
+        session = os.environ.get("XDG_SESSION_TYPE", "desconhecida")
+        self.info.set_text(f"Instalado: {installed}. Sessão gráfica: {session}.")
+        return False
+
+    def run_cmd(self, args, check=True):
+        return subprocess.run(args, text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, check=check)
+
+    def check_platform(self):
+        if sys.platform != "linux":
+            raise RuntimeError("Este instalador é somente para Linux.")
+        if os.uname().machine != "x86_64":
+            raise RuntimeError("Esta build é somente para computadores x86_64.")
+        release = read_os_release()
+        if release.get("ID") != "ubuntu" or release.get("VERSION_ID") != "26.04":
+            pretty = release.get("PRETTY_NAME", "sistema desconhecido")
+            raise RuntimeError(
+                "Esta build foi preparada para Ubuntu 26.04 LTS. "
+                f"Sistema detectado: {pretty}."
+            )
+
+    def install_packages(self):
+        if os.geteuid() == 0:
+            self.run_cmd(["apt-get", "update"])
+            self.run_cmd(["apt-get", "install", "-y", *RUNTIME_PACKAGES])
+            return
+        if shutil.which("pkexec"):
+            self.run_cmd(["pkexec", "env", "DEBIAN_FRONTEND=noninteractive",
+                          "sh", "-c",
+                          "apt-get update && apt-get install -y " +
+                          " ".join(RUNTIME_PACKAGES)])
+            return
+        raise RuntimeError(
+            "Não foi possível abrir a autenticação gráfica para instalar as dependências."
+        )
+
+    def release_info(self):
+        req = urllib.request.Request(API, headers={"User-Agent": "TeamTalk-Linux-installer"})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.load(response)
+        asset = next((a for a in data.get("assets", [])
+                      if a.get("name") == ASSET), None)
+        if not asset:
+            raise RuntimeError(f"O arquivo {ASSET} não foi encontrado na última Release.")
+        return data.get("tag_name", "desconhecida"), asset["browser_download_url"]
+
+    def download(self, url, destination):
+        req = urllib.request.Request(url, headers={"User-Agent": "TeamTalk-Linux-installer"})
+        with urllib.request.urlopen(req, timeout=90) as response, open(destination, "wb") as out:
+            total = int(response.headers.get("Content-Length") or 0)
+            done = 0
+            while True:
+                chunk = response.read(1024 * 256)
+                if not chunk:
+                    break
+                out.write(chunk)
+                done += len(chunk)
+                if total:
+                    fraction = 0.48 + 0.20 * min(done / total, 1.0)
+                    GLib.idle_add(self.announce, "Baixando o TeamTalk.", fraction)
+
+    def write_launcher(self):
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        CFG_DIR.mkdir(parents=True, exist_ok=True)
+        BIN_DIR.mkdir(parents=True, exist_ok=True)
+        DESKTOP_DIR.mkdir(parents=True, exist_ok=True)
+
+        launcher = f'''#!/usr/bin/env bash
 set -e
-APP_DIR="$APP_DIR"
-CFG_FILE="$CFG_DIR/TeamTalk5.ini"
-export LD_LIBRARY_PATH="\$APP_DIR\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
-cd "\$APP_DIR"
-exec "\$APP_DIR/teamtalk5" -cfg "\$CFG_FILE" "\$@"
-EOF
-    chmod +x "$LAUNCHER"
+APP_DIR="{APP_DIR}"
+CFG_FILE="{CFG_DIR / 'TeamTalk5.ini'}"
+export LD_LIBRARY_PATH="$APP_DIR${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}"
+cd "$APP_DIR"
+exec "$APP_DIR/teamtalk5" -cfg "$CFG_FILE" "$@"
+'''
+        LAUNCHER.write_text(launcher, encoding="utf-8")
+        LAUNCHER.chmod(0o755)
 
-    cat > "$DESKTOP_FILE" <<EOF
-[Desktop Entry]
+        desktop = f'''[Desktop Entry]
 Type=Application
-Name=TeamTalk 5 Linux (Ctrl PTT)
-Comment=TeamTalk Linux com suporte a Ctrl como Push-to-Talk no X11
-Exec=$LAUNCHER
+Name=TeamTalk 5 Linux
+Comment=TeamTalk Linux
+Exec={LAUNCHER}
 Icon=audio-input-microphone
 Terminal=false
 Categories=Network;AudioVideo;Audio;
 StartupNotify=true
-EOF
-    chmod +x "$DESKTOP_FILE" 2>/dev/null || true
+'''
+        DESKTOP_FILE.write_text(desktop, encoding="utf-8")
+        DESKTOP_FILE.chmod(0o755)
 
-    if command -v update-desktop-database >/dev/null 2>&1; then
-        update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
-    fi
+    def worker_install(self):
+        temp_dir = None
+        try:
+            GLib.idle_add(self.announce, "Verificando o sistema.", 0.05)
+            self.check_platform()
 
-    rm -rf "$TMP_DIR"
-    TMP_DIR=""
+            GLib.idle_add(self.announce, "Instalando dependências necessárias.", 0.15)
+            self.install_packages()
 
-    if zenity --question --title="$TITLE" --width=520 \
-        --ok-label="Abrir TeamTalk" --cancel-label="Concluir" \
-        --text="TeamTalk Linux $tag foi instalado com sucesso.\n\nAplicativo: $APP_DIR\nConfiguração: $CFG_DIR/TeamTalk5.ini\n\nDeseja abrir o TeamTalk agora?" 2>/dev/null; then
-        "$LAUNCHER" >/dev/null 2>&1 &
-    fi
-}
+            GLib.idle_add(self.announce, "Consultando a versão mais recente.", 0.38)
+            tag, url = self.release_info()
 
-uninstall_app() {
-    if [[ ! -e "$APP_DIR" && ! -e "$LAUNCHER" && ! -e "$DESKTOP_FILE" ]]; then
-        show_info "O TeamTalk Linux não parece estar instalado para este usuário."
-        return
-    fi
+            temp_dir = Path(tempfile.mkdtemp(prefix="teamtalk-linux-"))
+            archive = temp_dir / ASSET
 
-    if ! zenity --question --title="$TITLE" --width=520 \
-        --ok-label="Desinstalar" --cancel-label="Cancelar" \
-        --text="Deseja remover o TeamTalk Linux?\n\nA configuração será preservada em:\n$CFG_DIR" 2>/dev/null; then
-        return
-    fi
+            GLib.idle_add(self.announce, f"Baixando TeamTalk {tag}.", 0.48)
+            self.download(url, archive)
 
-    rm -rf "$APP_DIR"
-    rm -f "$LAUNCHER" "$DESKTOP_FILE"
-    show_info "TeamTalk Linux removido.\n\nSua configuração foi preservada em:\n$CFG_DIR"
-}
+            GLib.idle_add(self.announce, "Extraindo os arquivos.", 0.72)
+            extract_dir = temp_dir / "extract"
+            extract_dir.mkdir()
+            with tarfile.open(archive, "r:gz") as tar:
+                tar.extractall(extract_dir, filter="data")
 
-open_app() {
-    if [[ ! -x "$LAUNCHER" ]]; then
-        show_warning "O TeamTalk Linux ainda não está instalado."
-        return
-    fi
-    "$LAUNCHER" >/dev/null 2>&1 &
-}
+            matches = list(extract_dir.glob("**/client/teamtalk5"))
+            if not matches:
+                raise RuntimeError("O executável teamtalk5 não foi encontrado no pacote.")
+            client_dir = matches[0].parent
 
-main_menu() {
-    local installed="Não"
-    [[ -x "$APP_DIR/teamtalk5" ]] && installed="Sim"
-    local session="${XDG_SESSION_TYPE:-desconhecida}"
+            GLib.idle_add(self.announce, "Instalando os arquivos do TeamTalk.", 0.86)
+            if APP_DIR.exists():
+                shutil.rmtree(APP_DIR)
+            shutil.copytree(client_dir, APP_DIR)
+            (APP_DIR / "teamtalk5").chmod(0o755)
 
-    while true; do
-        local choice status
+            CFG_DIR.mkdir(parents=True, exist_ok=True)
+            cfg = CFG_DIR / "TeamTalk5.ini"
+            if not cfg.exists():
+                default_cfg = APP_DIR / "TeamTalk5.ini.default"
+                if default_cfg.exists():
+                    shutil.copy2(default_cfg, cfg)
+                else:
+                    cfg.touch()
 
-        # Do not use Zenity's list/radiolist here. Standard GTK dialog
-        # buttons expose their names directly through AT-SPI, so Orca can
-        # announce each available action while the user moves with Tab.
-        set +e
-        choice="$(zenity --question --title="$TITLE" --width=620 \
-            --text="Escolha uma ação para o TeamTalk Linux.\n\nInstalado: $installed    Sessão: $session\n\nUse Tab para navegar entre os botões." \
-            --ok-label="Instalar ou atualizar" \
-            --cancel-label="Fechar" \
-            --extra-button="Abrir TeamTalk" \
-            --extra-button="Desinstalar" 2>/dev/null)"
-        status=$?
-        set -e
+            GLib.idle_add(self.announce, "Criando o atalho no menu de aplicativos.", 0.95)
+            self.write_launcher()
+            if shutil.which("update-desktop-database"):
+                subprocess.run(["update-desktop-database", str(DESKTOP_DIR)],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
 
-        [[ "$status" -eq 0 ]] || break
+            GLib.idle_add(self.update_installed_label)
+            GLib.idle_add(self.finish, f"TeamTalk {tag} instalado com sucesso.")
+        except Exception as exc:
+            GLib.idle_add(self.fail, "Não foi possível instalar o TeamTalk", str(exc))
+        finally:
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
-        # The normal OK button returns no text. Extra buttons return their
-        # own labels on stdout.
-        [[ -n "$choice" ]] || choice="Instalar ou atualizar"
+    def on_install(self, *_):
+        if self.busy:
+            return
+        self.set_busy(True)
+        self.announce("Iniciando a instalação.", 0.01)
+        threading.Thread(target=self.worker_install, daemon=True).start()
 
-        case "$choice" in
-            "Instalar ou atualizar")
-                install_or_update
-                [[ -x "$APP_DIR/teamtalk5" ]] && installed="Sim"
-                ;;
-            "Abrir TeamTalk")
-                open_app
-                ;;
-            "Desinstalar")
-                uninstall_app
-                [[ -x "$APP_DIR/teamtalk5" ]] || installed="Não"
-                ;;
-            *)
-                break
-                ;;
-        esac
-    done
-}
+    def on_open(self, *_):
+        if not LAUNCHER.is_file():
+            self.dialog(Gtk.MessageType.WARNING,
+                        "TeamTalk não instalado",
+                        "Escolha “Instalar ou atualizar” primeiro.")
+            return
+        try:
+            subprocess.Popen([str(LAUNCHER)],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+            self.status.set_text("TeamTalk iniciado.")
+        except OSError as exc:
+            self.dialog(Gtk.MessageType.ERROR, "Não foi possível abrir o TeamTalk", str(exc))
 
-ensure_zenity
-check_platform
-main_menu
+    def on_uninstall(self, *_):
+        if self.busy:
+            return
+        if not APP_DIR.exists() and not LAUNCHER.exists() and not DESKTOP_FILE.exists():
+            self.dialog(Gtk.MessageType.INFO, "TeamTalk não está instalado")
+            return
+        response = self.dialog(
+            Gtk.MessageType.QUESTION,
+            "Desinstalar TeamTalk?",
+            f"A configuração será preservada em {CFG_DIR}.",
+            Gtk.ButtonsType.OK_CANCEL,
+        )
+        if response != Gtk.ResponseType.OK:
+            return
+        try:
+            if APP_DIR.exists():
+                shutil.rmtree(APP_DIR)
+            LAUNCHER.unlink(missing_ok=True)
+            DESKTOP_FILE.unlink(missing_ok=True)
+            self.update_installed_label()
+            self.announce("TeamTalk desinstalado. A configuração foi preservada.", 1.0)
+        except OSError as exc:
+            self.dialog(Gtk.MessageType.ERROR, "Falha ao desinstalar", str(exc))
+
+win = Installer()
+Gtk.main()
+PY
