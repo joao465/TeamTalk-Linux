@@ -5,10 +5,6 @@ on:
     branches: [ "main" ]
     paths:
       - "patches/**"
-      - "install.sh"
-      - "install-gui.sh"
-      - "uninstall.sh"
-      - ".github/workflows/build.yml"
   workflow_dispatch:
 
 concurrency:
@@ -205,4 +201,4 @@ jobs:
             "install-gui.sh" \
             "uninstall.sh" \
             --title "TeamTalk Linux Ctrl PTT - build ${GITHUB_RUN_NUMBER}" \
-            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador gráfico GNOME/GTK (Zenity), instalador de terminal e desinstalador. Corrige hotkeys X11 no Qt 6 e permite usar Ctrl sozinho como Push-to-Talk. Não contém nem altera o TeamTalk5Pro."
+            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador gráfico GTK acessível, instalador de terminal e desinstalador. Corrige hotkeys X11 no Qt 6 e permite usar Ctrl sozinho como Push-to-Talk em sessões X11/Xorg. Não contém nem altera o TeamTalk5Pro."
