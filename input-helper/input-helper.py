@@ -72,17 +72,22 @@ def open_keyboard_devices(existing_paths: Set[str]) -> Dict[int, str]:
     for path in sorted(glob.glob("/dev/input/event*")):
         if path in existing_paths:
             continue
+
+        fd = None
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
             if not supports_left_ctrl(fd):
                 os.close(fd)
+                fd = None
                 continue
             opened[fd] = path
+            fd = None  # ownership moved to the returned mapping
         except (OSError, IOError):
-            try:
-                os.close(fd)  # type: ignore[name-defined]
-            except Exception:
-                pass
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
     return opened
 
 
