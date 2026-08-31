@@ -5,6 +5,8 @@ on:
     branches: [ "main" ]
     paths:
       - "patches/**"
+      - "gnome-extension/**"
+      - ".github/workflows/build.yml"
   workflow_dispatch:
 
 concurrency:
@@ -47,15 +49,17 @@ jobs:
           git -C TeamTalk5 submodule update --init --recursive
           echo "Official base: $(git -C TeamTalk5 rev-parse HEAD)"
 
-      - name: Apply Linux Ctrl PTT patch
+      - name: Apply Linux Ctrl PTT patches
         run: |
           python3 patches/apply_linux_hotkeys.py TeamTalk5
           # Qt 6 exposes QX11Application through QGuiApplication. The upstream
           # mainwindow.cpp already includes QGuiApplication, so no separate
           # QNativeInterface forwarding header is required on Ubuntu 26.04.
           sed -i '/#include <QNativeInterface>/d' TeamTalk5/Client/qtTeamTalk/mainwindow.cpp
+          python3 patches/apply_gnome_wayland_ptt.py TeamTalk5
           git -C TeamTalk5 diff -- \
             Client/qtTeamTalk/keycompdlg.cpp \
+            Client/qtTeamTalk/mainwindow.h \
             Client/qtTeamTalk/mainwindow.cpp \
             Client/qtTeamTalk/utilhotkey.cpp
 
@@ -94,6 +98,7 @@ jobs:
             echo "===== Applied diff ====="
             git diff -- \
               Client/qtTeamTalk/keycompdlg.cpp \
+              Client/qtTeamTalk/mainwindow.h \
               Client/qtTeamTalk/mainwindow.cpp \
               Client/qtTeamTalk/utilhotkey.cpp || true
             echo "===== End applied diff ====="
@@ -161,7 +166,7 @@ jobs:
           PKG="$DIST/teamtalk-linux-ctrlptt-ubuntu26-x86_64"
 
           rm -rf "$DIST"
-          mkdir -p "$PKG/client"
+          mkdir -p "$PKG/client" "$PKG/gnome-extension"
 
           cp -a "$INSTALL/Client/qtTeamTalk/." "$PKG/client/"
           cp "$INSTALL/Library/TeamTalk_DLL/libTeamTalk5.so" "$PKG/client/"
@@ -171,7 +176,10 @@ jobs:
           cp "$ROOT/Setup/Client/Linux/run.sh" "$PKG/client/run.sh"
           chmod +x "$PKG/client/teamtalk5" "$PKG/client/run.sh"
 
-          printf 'Base oficial: BearWare/TeamTalk5\nCommit: %s\nAlteração: Linux Qt6/X11 hotkeys + Ctrl sozinho como PTT\nTeamTalk Pro: não incluído\n' \
+          cp gnome-extension/metadata.json "$PKG/gnome-extension/"
+          cp gnome-extension/extension.js "$PKG/gnome-extension/"
+
+          printf 'Base oficial: BearWare/TeamTalk5\nCommit: %s\nAlteração: Linux Qt6/X11 + Ctrl PTT global no GNOME Wayland via extensão GNOME Shell/D-Bus\nTeamTalk Pro: não incluído\n' \
             "$UPSTREAM_REF" > "$PKG/BUILD-INFO.txt"
 
           tar -czf "$DIST/$ASSET_NAME" -C "$DIST" "$(basename "$PKG")"
@@ -187,6 +195,8 @@ jobs:
             install.sh
             install-gui.sh
             uninstall.sh
+            gnome-extension/metadata.json
+            gnome-extension/extension.js
 
       - name: Publish GitHub Release
         env:
@@ -200,5 +210,7 @@ jobs:
             "install.sh" \
             "install-gui.sh" \
             "uninstall.sh" \
+            "gnome-extension/metadata.json#teamtalk-gnome-extension-metadata.json" \
+            "gnome-extension/extension.js#teamtalk-gnome-extension.js" \
             --title "TeamTalk Linux Ctrl PTT - build ${GITHUB_RUN_NUMBER}" \
-            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador gráfico GTK acessível, instalador de terminal e desinstalador. Corrige hotkeys X11 no Qt 6 e permite usar Ctrl sozinho como Push-to-Talk em sessões X11/Xorg. Não contém nem altera o TeamTalk5Pro."
+            --notes "Build Linux x86_64 baseado no TeamTalk5 oficial da BearWare. Inclui instalador gráfico GTK acessível, extensão GNOME Shell e integração D-Bus para Ctrl esquerdo sozinho como Push-to-Talk global no GNOME/Wayland. Em X11 continua usando XGrabKey. Ctrl+Tab, Ctrl+C e outras combinações continuam funcionando enquanto Ctrl permanece como PTT. Não contém nem altera o TeamTalk5Pro."
