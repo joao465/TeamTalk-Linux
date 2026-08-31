@@ -53,13 +53,16 @@ ASSET = "teamtalk-linux-ctrlptt-ubuntu26-x86_64.tgz"
 API = f"https://api.github.com/repos/{REPO}/releases/latest"
 
 HOME = Path.home()
+DATA_HOME = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share"))
 APP_DIR = Path(os.environ.get("TEAMTALK_LINUX_APP_DIR",
                               HOME / ".local/opt/teamtalk5-linux-ctrlptt"))
 CFG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "teamtalk5-linux-ctrlptt"
 BIN_DIR = HOME / ".local/bin"
-DESKTOP_DIR = Path(os.environ.get("XDG_DATA_HOME", HOME / ".local/share")) / "applications"
+DESKTOP_DIR = DATA_HOME / "applications"
 LAUNCHER = BIN_DIR / "teamtalk5-linux"
 DESKTOP_FILE = DESKTOP_DIR / "teamtalk5-linux.desktop"
+EXT_UUID = "teamtalk-ctrl-ptt@joao465"
+EXT_DIR = DATA_HOME / "gnome-shell/extensions" / EXT_UUID
 
 RUNTIME_PACKAGES = [
     "ca-certificates", "wget", "python3", "tar",
@@ -67,6 +70,7 @@ RUNTIME_PACKAGES = [
     "libqt6texttospeech6", "libqt6widgets6", "libqt6xml6",
     "libasound2t64", "libpulse0", "libxss1", "qt6-speech-speechd-plugin",
 ]
+
 
 def read_os_release():
     data = {}
@@ -79,10 +83,11 @@ def read_os_release():
         pass
     return data
 
+
 class Installer(Gtk.Window):
     def __init__(self):
         super().__init__(title="TeamTalk Linux — Instalador")
-        self.set_default_size(650, 360)
+        self.set_default_size(680, 390)
         self.set_border_width(18)
         self.connect("destroy", Gtk.main_quit)
         self.busy = False
@@ -105,8 +110,12 @@ class Installer(Gtk.Window):
 
         session = os.environ.get("XDG_SESSION_TYPE", "desconhecida")
         installed = "Sim" if (APP_DIR / "teamtalk5").is_file() else "Não"
-        self.info = Gtk.Label(label=f"Instalado: {installed}. Sessão gráfica: {session}.")
+        extension = "Sim" if (EXT_DIR / "extension.js").is_file() else "Não"
+        self.info = Gtk.Label(
+            label=f"TeamTalk instalado: {installed}. Extensão GNOME: {extension}. Sessão: {session}."
+        )
         self.info.set_xalign(0)
+        self.info.set_line_wrap(True)
         outer.pack_start(self.info, False, False, 0)
 
         self.status = Gtk.Label(label="Pronto.")
@@ -175,10 +184,11 @@ class Installer(Gtk.Window):
         self.dialog(
             Gtk.MessageType.INFO,
             "Sessão GNOME Wayland detectada",
-            "O TeamTalk pode ser instalado e usado normalmente. "
-            "Porém, Ctrl sozinho como atalho GLOBAL de pressionar-para-falar "
-            "não é suportado pela sessão GNOME Wayland do Ubuntu 26.04. "
-            "O modo Ctrl sozinho requer uma sessão de desktop X11/Xorg."
+            "Esta versão instala uma extensão do GNOME Shell para permitir "
+            "Ctrl esquerdo sozinho como Push-to-Talk global. O Ctrl não é bloqueado: "
+            "Ctrl+Tab, Ctrl+C e outras combinações continuam funcionando. "
+            "Se a extensão não puder ser ativada imediatamente, será necessário "
+            "sair e entrar na sessão GNOME uma vez."
         )
         return False
 
@@ -195,10 +205,8 @@ class Installer(Gtk.Window):
         self.progress.set_fraction(fraction)
         self.progress.set_text(f"{percent}% — {text}")
         acc = self.progress.get_accessible()
+        acc.set_name(f"Progresso da instalação: {percent} por cento")
         acc.set_description(f"{percent} por cento. {text}")
-        # Keep the accessible progress control focused while work is running.
-        # Orca then receives the AT-SPI value/status changes instead of a
-        # silent visual-only animation.
         self.progress.grab_focus()
         return False
 
@@ -216,8 +224,11 @@ class Installer(Gtk.Window):
 
     def update_installed_label(self):
         installed = "Sim" if (APP_DIR / "teamtalk5").is_file() else "Não"
+        extension = "Sim" if (EXT_DIR / "extension.js").is_file() else "Não"
         session = os.environ.get("XDG_SESSION_TYPE", "desconhecida")
-        self.info.set_text(f"Instalado: {installed}. Sessão gráfica: {session}.")
+        self.info.set_text(
+            f"TeamTalk instalado: {installed}. Extensão GNOME: {extension}. Sessão: {session}."
+        )
         return False
 
     def run_cmd(self, args, check=True):
@@ -274,7 +285,7 @@ class Installer(Gtk.Window):
                 out.write(chunk)
                 done += len(chunk)
                 if total:
-                    fraction = 0.48 + 0.20 * min(done / total, 1.0)
+                    fraction = 0.44 + 0.20 * min(done / total, 1.0)
                     GLib.idle_add(self.announce, "Baixando o TeamTalk.", fraction)
 
     def write_launcher(self):
@@ -297,7 +308,7 @@ exec "$APP_DIR/teamtalk5" -cfg "$CFG_FILE" "$@"
         desktop = f'''[Desktop Entry]
 Type=Application
 Name=TeamTalk 5 Linux
-Comment=TeamTalk Linux
+Comment=TeamTalk Linux com Ctrl esquerdo global como Push-to-Talk
 Exec={LAUNCHER}
 Icon=audio-input-microphone
 Terminal=false
@@ -307,25 +318,62 @@ StartupNotify=true
         DESKTOP_FILE.write_text(desktop, encoding="utf-8")
         DESKTOP_FILE.chmod(0o755)
 
+    def install_gnome_extension(self, package_root):
+        source = package_root / "gnome-extension"
+        metadata = source / "metadata.json"
+        extension_js = source / "extension.js"
+        if not metadata.is_file() or not extension_js.is_file():
+            raise RuntimeError(
+                "A extensão GNOME para Ctrl PTT não foi encontrada dentro do pacote."
+            )
+
+        EXT_DIR.parent.mkdir(parents=True, exist_ok=True)
+        if EXT_DIR.exists():
+            shutil.rmtree(EXT_DIR)
+        shutil.copytree(source, EXT_DIR)
+
+        # Try to enable it immediately. A freshly copied extension may not be
+        # known to the running Shell until the next login; that case is not an
+        # installation failure and is reported clearly to the user.
+        tool = shutil.which("gnome-extensions")
+        if not tool:
+            return False, "O comando gnome-extensions não foi encontrado. Saia e entre novamente na sessão GNOME e habilite a extensão TeamTalk Ctrl Push-to-Talk."
+
+        result = subprocess.run(
+            [tool, "enable", EXT_UUID],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if result.returncode == 0:
+            return True, "Extensão GNOME habilitada."
+
+        details = (result.stdout or "").strip()
+        return False, (
+            "A extensão foi instalada, mas o GNOME Shell ainda não a reconheceu nesta sessão. "
+            "Saia e entre na sessão GNOME uma vez; depois ela poderá ser habilitada. "
+            + (f"Detalhe: {details}" if details else "")
+        )
+
     def worker_install(self):
         temp_dir = None
         try:
             GLib.idle_add(self.announce, "Verificando o sistema.", 0.05)
             self.check_platform()
 
-            GLib.idle_add(self.announce, "Instalando dependências necessárias.", 0.15)
+            GLib.idle_add(self.announce, "Instalando dependências necessárias.", 0.14)
             self.install_packages()
 
-            GLib.idle_add(self.announce, "Consultando a versão mais recente.", 0.38)
+            GLib.idle_add(self.announce, "Consultando a versão mais recente.", 0.35)
             tag, url = self.release_info()
 
             temp_dir = Path(tempfile.mkdtemp(prefix="teamtalk-linux-"))
             archive = temp_dir / ASSET
 
-            GLib.idle_add(self.announce, f"Baixando TeamTalk {tag}.", 0.48)
+            GLib.idle_add(self.announce, f"Baixando TeamTalk {tag}.", 0.44)
             self.download(url, archive)
 
-            GLib.idle_add(self.announce, "Extraindo os arquivos.", 0.72)
+            GLib.idle_add(self.announce, "Extraindo os arquivos.", 0.68)
             extract_dir = temp_dir / "extract"
             extract_dir.mkdir()
             with tarfile.open(archive, "r:gz") as tar:
@@ -335,8 +383,9 @@ StartupNotify=true
             if not matches:
                 raise RuntimeError("O executável teamtalk5 não foi encontrado no pacote.")
             client_dir = matches[0].parent
+            package_root = client_dir.parent
 
-            GLib.idle_add(self.announce, "Instalando os arquivos do TeamTalk.", 0.86)
+            GLib.idle_add(self.announce, "Instalando os arquivos do TeamTalk.", 0.80)
             if APP_DIR.exists():
                 shutil.rmtree(APP_DIR)
             shutil.copytree(client_dir, APP_DIR)
@@ -351,7 +400,10 @@ StartupNotify=true
                 else:
                     cfg.touch()
 
-            GLib.idle_add(self.announce, "Criando o atalho no menu de aplicativos.", 0.95)
+            GLib.idle_add(self.announce, "Instalando a extensão GNOME para Ctrl PTT.", 0.89)
+            extension_enabled, extension_note = self.install_gnome_extension(package_root)
+
+            GLib.idle_add(self.announce, "Criando o atalho no menu de aplicativos.", 0.96)
             self.write_launcher()
             if shutil.which("update-desktop-database"):
                 subprocess.run(["update-desktop-database", str(DESKTOP_DIR)],
@@ -359,7 +411,11 @@ StartupNotify=true
                                stderr=subprocess.DEVNULL)
 
             GLib.idle_add(self.update_installed_label)
-            GLib.idle_add(self.finish, f"TeamTalk {tag} instalado com sucesso.")
+            if extension_enabled:
+                final = f"TeamTalk {tag} instalado. Extensão GNOME habilitada; Ctrl esquerdo global está pronto para PTT."
+            else:
+                final = f"TeamTalk {tag} instalado. {extension_note}"
+            GLib.idle_add(self.finish, final)
         except Exception as exc:
             GLib.idle_add(self.fail, "Não foi possível instalar o TeamTalk", str(exc))
         finally:
@@ -391,26 +447,35 @@ StartupNotify=true
     def on_uninstall(self, *_):
         if self.busy:
             return
-        if not APP_DIR.exists() and not LAUNCHER.exists() and not DESKTOP_FILE.exists():
+        if (not APP_DIR.exists() and not LAUNCHER.exists() and
+                not DESKTOP_FILE.exists() and not EXT_DIR.exists()):
             self.dialog(Gtk.MessageType.INFO, "TeamTalk não está instalado")
             return
         response = self.dialog(
             Gtk.MessageType.QUESTION,
             "Desinstalar TeamTalk?",
-            f"A configuração será preservada em {CFG_DIR}.",
+            f"A configuração será preservada em {CFG_DIR}. A extensão GNOME do Ctrl PTT também será removida.",
             Gtk.ButtonsType.OK_CANCEL,
         )
         if response != Gtk.ResponseType.OK:
             return
         try:
+            tool = shutil.which("gnome-extensions")
+            if tool:
+                subprocess.run([tool, "disable", EXT_UUID],
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+            if EXT_DIR.exists():
+                shutil.rmtree(EXT_DIR)
             if APP_DIR.exists():
                 shutil.rmtree(APP_DIR)
             LAUNCHER.unlink(missing_ok=True)
             DESKTOP_FILE.unlink(missing_ok=True)
             self.update_installed_label()
-            self.announce("TeamTalk desinstalado. A configuração foi preservada.", 1.0)
+            self.announce("TeamTalk e extensão GNOME removidos. A configuração foi preservada.", 1.0)
         except OSError as exc:
             self.dialog(Gtk.MessageType.ERROR, "Falha ao desinstalar", str(exc))
+
 
 win = Installer()
 Gtk.main()
