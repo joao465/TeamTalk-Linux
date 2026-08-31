@@ -28,16 +28,12 @@ plain_error() {
     exit 1
 }
 
-# Zenity normally ships with GNOME/Ubuntu. If it is missing, install only
-# Zenity first using PolicyKit so the remainder of the installer is graphical.
 ensure_zenity() {
     if command -v zenity >/dev/null 2>&1; then
         return
     fi
 
-    if [[ "$(uname -s)" != "Linux" ]]; then
-        plain_error "Este instalador é somente para Linux."
-    fi
+    [[ "$(uname -s)" == "Linux" ]] || plain_error "Este instalador é somente para Linux."
 
     if [[ "$EUID" -eq 0 ]]; then
         apt-get update && env DEBIAN_FRONTEND=noninteractive apt-get install -y zenity
@@ -254,6 +250,7 @@ EOF
         update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
     fi
 
+    rm -rf "$TMP_DIR"
     TMP_DIR=""
 
     if zenity --question --title="$TITLE" --width=520 \
