@@ -122,18 +122,19 @@ QString MainWindow::getGnomeCtrlPttStatus()
     const bool hasHotkey = loadHotKeySettings(HOTKEY_PUSHTOTALK, hk);
     const bool ctrlOnly = hasHotkey && hk.size() == 1 && hk[0] == Qt::CTRL;
     const bool pttEnabled = ui.actionEnablePushToTalk->isChecked();
+    const QString sessionType = qEnvironmentVariable("XDG_SESSION_TYPE");
+    const QString qpa = QGuiApplication::platformName();
 
-    return QStringLiteral("service=ready;ptt=%1;ctrlOnly=%2")
+    return QStringLiteral("service=ready;ptt=%1;ctrlOnly=%2;session=%3;qpa=%4")
         .arg(pttEnabled ? QStringLiteral("on") : QStringLiteral("off"))
-        .arg(ctrlOnly ? QStringLiteral("yes") : QStringLiteral("no"));
+        .arg(ctrlOnly ? QStringLiteral("yes") : QStringLiteral("no"))
+        .arg(sessionType.isEmpty() ? QStringLiteral("unknown") : sessionType)
+        .arg(qpa.isEmpty() ? QStringLiteral("unknown") : qpa);
 }
 
 void MainWindow::setGnomeCtrlPttPressed(bool active)
 {
     // Use the live UI state instead of the persisted active-hotkeys bit.
-    // The persisted setting can lag behind the current QAction state while
-    // configuring/reloading shortcuts, which made valid D-Bus calls return
-    // without touching voice transmission.
     if(!ui.actionEnablePushToTalk->isChecked())
     {
         qWarning() << "GNOME Ctrl PTT ignored: Push-to-Talk action is disabled";
@@ -162,9 +163,10 @@ void MainWindow::keysActive(quint32 keycode, quint32 mods, bool active)
 '''
 replace_once(mainwindow, old, new, "receber Ctrl global por D-Bus usando estado atual do TeamTalk")
 
-# This block exists after apply_linux_hotkeys.py has already run. On X11 we
-# keep using XGrabKey. On Wayland, bare Ctrl for PTT is registered logically
-# and driven by the GNOME Shell D-Bus relay instead of showing an X11 error.
+# This block exists after apply_linux_hotkeys.py has already run. A Qt app can
+# run through XWayland and therefore expose an X11 Display even while the real
+# desktop session is Wayland. Decide the PTT backend from XDG_SESSION_TYPE,
+# not from whether QX11Application happens to be available.
 old = r'''    Display* display = teamtalkHotKeyX11Display();
     if(!display)
     {
@@ -187,24 +189,38 @@ old = r'''    Display* display = teamtalkHotKeyX11Display();
 '''
 new = r'''    const bool modifierOnly = hk.size() == 1 &&
                               teamtalkModifierKeySym(hk[0]) != NoSymbol;
+    const bool waylandSession =
+        qEnvironmentVariable("XDG_SESSION_TYPE").compare(
+            QStringLiteral("wayland"), Qt::CaseInsensitive) == 0;
 
-    Display* display = teamtalkHotKeyX11Display();
-    if(!display)
+    if(waylandSession)
     {
-        // GNOME/Wayland path: bare Ctrl PTT is delivered by the TeamTalk
-        // GNOME Shell extension over D-Bus. Keep the shortcut enabled and
-        // visible instead of rejecting it merely because Qt is on Wayland.
+        // IMPORTANT: a Qt application can still run through XWayland and have
+        // an X11 display such as :0. XGrabKey on that XWayland display is not
+        // a compositor-global grab. On a real Wayland session bare Ctrl PTT
+        // must therefore always use the GNOME Shell extension + D-Bus relay.
         if(id == HOTKEY_PUSHTOTALK && modifierOnly && hk[0] == Qt::CTRL)
         {
+            qWarning() << "GNOME Ctrl PTT: using D-Bus relay on Wayland; Qt platform ="
+                       << QGuiApplication::platformName();
             m_pttlabel->setText(tr("Push To Talk: ") + getHotKeyText(hk));
             return;
         }
 
         QMessageBox::warning(this, tr("Enable HotKey"),
-                             tr("This global hotkey requires an X11/Xorg session. "
-                                "On GNOME Wayland, TeamTalk currently supports "
-                                "bare Ctrl for Push-to-Talk through the installed "
-                                "TeamTalk GNOME Shell extension."));
+                             tr("This global hotkey is not supported on Wayland. "
+                                "On GNOME Wayland, TeamTalk supports bare Ctrl "
+                                "for Push-to-Talk through the installed GNOME "
+                                "Shell extension."));
+        return;
+    }
+
+    Display* display = teamtalkHotKeyX11Display();
+    if(!display)
+    {
+        QMessageBox::warning(this, tr("Enable HotKey"),
+                             tr("The X11 display required for this global hotkey "
+                                "is not available."));
         return;
     }
 
@@ -216,6 +232,6 @@ new = r'''    const bool modifierOnly = hk.size() == 1 &&
     // XGrabKey requires a real keycode. When the entire shortcut is a
     // modifier, convert it to the physical left-side X11 modifier key.
 '''
-replace_once(mainwindow, old, new, "aceitar Ctrl PTT via GNOME Wayland")
+replace_once(mainwindow, old, new, "usar D-Bus no Wayland mesmo quando Qt roda via XWayland")
 
 print("Integração GNOME Wayland Ctrl PTT aplicada.")
